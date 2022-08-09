@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"crypto/tls"
+	"time"
 
 	"github.com/go-kratos/kratos/v2/encoding"
 	"github.com/go-kratos/kratos/v2/log"
@@ -151,10 +152,21 @@ func WithPublishContext(ctx context.Context) PublishOption {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+type ConsumeRetry struct {
+	MaxRetryCount  int64
+	MaxRetryTime   time.Duration
+	MinDelay       time.Duration
+	Factor         float64
+	HandleRetryEnd func(context.Context, Event)
+}
+
 type SubscribeOptions struct {
-	AutoAck bool
-	Queue   string
-	Context context.Context
+	AutoAck       bool
+	Queue         string
+	Context       context.Context
+	MessageTag    string
+	NumOfMessages int
+	ConsumeRetry  *ConsumeRetry
 }
 
 type SubscribeOption func(*SubscribeOptions)
@@ -201,5 +213,38 @@ func WithQueueName(name string) SubscribeOption {
 func WithSubscribeContext(ctx context.Context) SubscribeOption {
 	return func(o *SubscribeOptions) {
 		o.Context = ctx
+	}
+}
+
+func WithMessageTag(messageTag string) SubscribeOption {
+	return func(o *SubscribeOptions) {
+		o.MessageTag = messageTag
+	}
+}
+
+func WithNumOfMessages(numOfMessages int) SubscribeOption {
+	return func(o *SubscribeOptions) {
+		o.NumOfMessages = numOfMessages
+	}
+}
+
+func WithConsumeRetry(maxRetryCount int64, maxRetryTime, minDelay time.Duration,
+	factor float64, handleRetryEnd func(context.Context, Event)) SubscribeOption {
+	return func(o *SubscribeOptions) {
+		if maxRetryCount > 0 || maxRetryTime > 0 {
+			if minDelay <= 0 {
+				minDelay = 1 * time.Second
+			}
+			if factor <= 0 {
+				factor = 1
+			}
+			o.ConsumeRetry = &ConsumeRetry{
+				MaxRetryCount:  maxRetryCount,
+				MaxRetryTime:   maxRetryTime,
+				MinDelay:       minDelay,
+				Factor:         factor,
+				HandleRetryEnd: handleRetryEnd,
+			}
+		}
 	}
 }

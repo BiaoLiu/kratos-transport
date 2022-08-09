@@ -2,13 +2,26 @@ package rocketmq
 
 import (
 	"context"
-	aliyun "github.com/aliyunmq/mq-http-go-sdk"
-	"github.com/go-kratos/kratos/v2/log"
-	"github.com/gogap/errors"
-	"github.com/tx7do/kratos-transport/broker"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	aliyun "github.com/aliyunmq/mq-http-go-sdk"
+	"github.com/go-kratos/kratos/v2/log"
+	gerr "github.com/gogap/errors"
+	"github.com/panjf2000/ants/v2"
+	"github.com/rfyiamcool/backoff"
+	"github.com/spf13/cast"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/tx7do/kratos-transport/broker"
+)
+
+const (
+	FirstRetryTime = "first_retry_time"
+	RetriedCount   = "retried_count"
 )
 
 type aliyunBroker struct {
@@ -199,6 +212,57 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 	return nil
 }
 
+// publishWithBackoffRetry 消息重发(指数退避重试算法)
+// maxRetryCount 最大重试次数
+// maxRetryTime 最大重试时间
+// minDelay 初始重试时间
+// factor 指数退避重试算法指数值
+func (r *aliyunBroker) publishWithBackoffRetry(ctx context.Context, msg *aliyunPublication, consumeRetry *broker.ConsumeRetry, opts ...broker.PublishOption) (string, int64, error) {
+	var firstRetryTime int64
+	var retriedCount int64
+	if consumeRetry == nil {
+		return "", 0, errors.New("无法重试，请配置重试信息")
+	}
+	if len(msg.Message().Headers) > 0 {
+		firstRetryTime = cast.ToInt64(msg.Message().Headers[FirstRetryTime])
+		retriedCount = cast.ToInt64(msg.Message().Headers[RetriedCount])
+	}
+	b := backoff.NewBackOff(
+		backoff.WithMinDelay(consumeRetry.MinDelay),
+		backoff.WithMaxDelay(consumeRetry.MaxRetryTime),
+		backoff.WithFactor(consumeRetry.Factor),
+	)
+	var i int64 = 0
+	for i = 0; i < retriedCount; i++ {
+		b.Duration()
+	}
+	delay := b.Duration()
+	opts = append(opts, WithDelayTimeLevel(int(delay.Milliseconds())))
+
+	retry := broker.NewRetry(firstRetryTime, retriedCount, consumeRetry.MaxRetryCount, consumeRetry.MaxRetryTime)
+	err := retry.Do(func(firstRetryTime int64, retriedCount int64) error {
+		m := map[string]string{
+			FirstRetryTime: cast.ToString(firstRetryTime),
+			RetriedCount:   cast.ToString(retriedCount),
+		}
+		opts = append(opts, WithProperties(m))
+		err := r.Publish(msg.topic, msg.Message().Body, opts...)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, broker.ErrMaxRetryTime) || errors.Is(err, broker.ErrMaxRetryCount) {
+			if consumeRetry.HandleRetryEnd != nil {
+				consumeRetry.HandleRetryEnd(ctx, msg)
+			}
+		}
+	}
+	firstRetryTimeStr := time.Unix(retry.FirstRetryTime(), 0).Format("2006-01-02 15:04:05")
+	return firstRetryTimeStr, retry.RetriedCount(), err
+}
+
 func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder broker.Binder, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
 	if r.client == nil {
 		return nil, errors.New("client is nil")
@@ -212,8 +276,11 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 	for _, o := range opts {
 		o(&options)
 	}
+	if options.NumOfMessages < 3 {
+		options.NumOfMessages = 3
+	}
 
-	mqConsumer := r.client.GetConsumer(r.instanceName, topic, options.Queue, "")
+	mqConsumer := r.client.GetConsumer(r.instanceName, topic, options.Queue, options.MessageTag)
 
 	sub := &aliyunSubscriber{
 		opts:    options,
@@ -230,18 +297,60 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 }
 
 func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
-	for {
-		endChan := make(chan int)
-		respChan := make(chan aliyun.ConsumeMessageResponse)
-		errChan := make(chan error)
-		go func() {
+	respChan := make(chan aliyun.ConsumeMessageResponse)
+	errChan := make(chan error)
+
+	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
+		var traceId string
+		h, _ := rqMsg.(*handleMessageRequest)
+
+		hCtx := context.Background()
+		spanCtx := trace.SpanContextFromContext(hCtx)
+
+		if len(h.AliyunPublication.Message().Headers) > 0 {
+			traceId = h.AliyunPublication.Message().Headers["traceid"]
+			if traceId != "" {
+				traceID, err := trace.TraceIDFromHex(traceId)
+				if err == nil {
+					spanCtx = spanCtx.WithTraceID(traceID)
+				}
+				hCtx = trace.ContextWithSpanContext(hCtx, spanCtx)
+			}
+		}
+		r.wrapHandleMessage(hCtx, h, sub.handler)
+	})
+	defer pool.Release()
+
+	go func() {
+		for {
+			if !r.connected {
+				break
+			}
+			// 长轮询消费消息，网络超时时间默认为35s。
+			// 长轮询表示如果Topic没有消息，则客户端请求会在服务端挂起3s，3s内如果有消息可以消费则立即返回响应。
+			// 一次最多消费3条（最多可设置为16条）
+			// 长轮询时间3s（最多可设置为30s）
+			sub.reader.ConsumeMessage(respChan, errChan, int32(sub.opts.NumOfMessages), 3)
+		}
+	}()
+
+	go func() {
+		for {
+			if !r.connected {
+				break
+			}
 			select {
 			case resp := <-respChan:
 				{
 					var err error
 					var m broker.Message
-					for _, msg := range resp.Messages {
+					var handles []string
+					var count int
+					h := handleMessageRequest{
+						ResCh: make(chan handleMessageResult, sub.opts.NumOfMessages),
+					}
 
+					for _, msg := range resp.Messages {
 						p := &aliyunPublication{
 							topic:  msg.Message,
 							reader: sub.reader,
@@ -249,69 +358,129 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							rm:     []string{msg.ReceiptHandle},
 							ctx:    r.opts.Context,
 						}
-
 						m.Headers = msg.Properties
 
 						if sub.binder != nil {
 							m.Body = sub.binder()
 						}
-
 						if err := broker.Unmarshal(r.opts.Codec, []byte(msg.MessageBody), m.Body); err != nil {
 							p.err = err
 							r.log.Error(err)
 						}
-
-						err = sub.handler(sub.opts.Context, p)
-						if err != nil {
-							r.log.Errorf("[rocketmq]: process message failed: %v", err)
+						h.Message = message{
+							Key:           msg.MessageKey,
+							Tag:           msg.MessageTag,
+							ReceiptHandle: msg.ReceiptHandle,
 						}
+						h.AliyunPublication = p
+						if err := pool.Invoke(h); err != nil {
+							r.log.Errorf("提交消费处理任务失败 msg:%+v err:%v", msg, err)
+							continue
+						}
+						count++
+					}
 
-						if sub.opts.AutoAck {
-							if err = p.Ack(); err != nil {
-								// 某些消息的句柄可能超时，会导致消息消费状态确认不成功。
-								if errAckItems, ok := err.(errors.ErrCode).Context()["Detail"].([]aliyun.ErrAckItem); ok {
-									for _, errAckItem := range errAckItems {
-										r.log.Errorf("ErrorHandle:%s, ErrorCode:%s, ErrorMsg:%s\n",
-											errAckItem.ErrorHandle, errAckItem.ErrorCode, errAckItem.ErrorMsg)
+					for i := 0; i < count; i++ {
+						select {
+						//case <-ticker.C:
+						//	LogInfo("消费消息超时")
+						case res := <-h.ResCh:
+							// 消息消费失败:
+							//   1.已配置重试策略，重试发布消息失败，不进行ack响应，依赖mq的重试
+							//   2.未配置重试策略，不进行ack响应，依赖mq的重试
+							if res.Err != nil {
+								if sub.opts.ConsumeRetry != nil {
+									opts := []broker.PublishOption{
+										WithTag(res.Message.Tag),
+										WithKeys([]string{res.Message.Key}),
 									}
-								} else {
-									r.log.Error("ack err =", err)
+									firstRetryTime, retriedCount, err := r.publishWithBackoffRetry(res.Ctx, res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
+
+									logMsg := "重试...%s msg:%+v 首次重试时间:%v 最大重试时间:%v 重试次数:%v 最大重试次数:%v"
+									retrySuccess := fmt.Sprintf(logMsg, "mq发送完成", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount)
+									retryFail := fmt.Sprintf(logMsg+" err:%v", "mq发送失败", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount, err)
+
+									switch err {
+									case nil:
+										handles = append(handles, res.Message.ReceiptHandle)
+										r.log.WithContext(res.Ctx).Infof(retrySuccess)
+									case broker.ErrMaxRetryCount, broker.ErrMaxRetryTime:
+										handles = append(handles, res.Message.ReceiptHandle)
+										r.log.WithContext(res.Ctx).Errorf(retryFail)
+									default:
+										r.log.WithContext(res.Ctx).Errorf(retryFail)
+									}
 								}
-								time.Sleep(time.Duration(3) * time.Second)
+							} else {
+								// 提交任务成功，取消息句柄用于回复消息状态
+								handles = append(handles, res.Message.ReceiptHandle)
 							}
 						}
 					}
+					close(h.ResCh)
 
-					endChan <- 1
+					if sub.opts.AutoAck {
+						if err = sub.reader.AckMessage(handles); err != nil {
+							// 某些消息的句柄可能超时，会导致消息消费状态确认不成功。
+							if errAckItems, ok := err.(gerr.ErrCode).Context()["Detail"].([]aliyun.ErrAckItem); ok {
+								for _, errAckItem := range errAckItems {
+									r.log.Errorf("ErrorHandle:%s, ErrorCode:%s, ErrorMsg:%s\n",
+										errAckItem.ErrorHandle, errAckItem.ErrorCode, errAckItem.ErrorMsg)
+								}
+							} else {
+								r.log.Error("ack err =", err)
+							}
+							time.Sleep(time.Duration(3) * time.Second)
+						}
+					}
 				}
 			case err := <-errChan:
 				{
 					// Topic中没有消息可消费。
-					if strings.Contains(err.(errors.ErrCode).Error(), "MessageNotExist") {
+					if strings.Contains(err.(gerr.ErrCode).Error(), "MessageNotExist") {
 						//r.log.Debug("No new message, continue!")
 					} else {
-						r.log.Error(err)
+						r.log.Error("获取MQ消息失败 err:%v", err)
 						time.Sleep(time.Duration(3) * time.Second)
 					}
-					endChan <- 1
 				}
 			case <-time.After(35 * time.Second):
 				{
 					//r.log.Debug("Timeout of consumer message ??")
-					endChan <- 1
 				}
-
 			case sub.done <- struct{}{}:
 				return
 			}
-		}()
+		}
+	}()
+}
 
-		// 长轮询消费消息，网络超时时间默认为35s。
-		// 长轮询表示如果Topic没有消息，则客户端请求会在服务端挂起3s，3s内如果有消息可以消费则立即返回响应。
-		sub.reader.ConsumeMessage(respChan, errChan,
-			3, // 一次最多消费3条（最多可设置为16条）。
-			3, // 长轮询时间3s（最多可设置为30s）。
-		)
-		<-endChan
+func (r *aliyunBroker) wrapHandleMessage(ctx context.Context, h *handleMessageRequest, handler broker.Handler) {
+	err := handler(ctx, h.AliyunPublication)
+	res := handleMessageResult{
+		Ctx:               ctx,
+		Err:               err,
+		AliyunPublication: h.AliyunPublication,
+		Message:           h.Message,
 	}
+	h.ResCh <- res
+}
+
+type handleMessageRequest struct {
+	AliyunPublication *aliyunPublication
+	Message           message
+	ResCh             chan handleMessageResult
+}
+
+type handleMessageResult struct {
+	Ctx               context.Context
+	Err               error
+	AliyunPublication *aliyunPublication
+	Message           message
+}
+
+type message struct {
+	Tag           string
+	Key           string
+	ReceiptHandle string
 }
