@@ -1,4 +1,4 @@
-module github.com/tx7do/kratos-transport
+module github.com/BiaoLiu/kratos-transport
 
 go 1.17
 
@@ -18,6 +18,7 @@ require (
 	github.com/segmentio/kafka-go v0.4.33
 	github.com/streadway/amqp v1.0.0
 	github.com/stretchr/testify v1.8.0
+	github.com/tx7do/kratos-transport main
 )
 
 require (
@@ -92,4 +93,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/tx7do/kratos-transport latest => github.com/BiaoLiu/kratos-transport latest
+replace github.com/tx7do/kratos-transport main => github.com/BiaoLiu/kratos-transport main

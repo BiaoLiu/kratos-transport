@@ -297,15 +297,14 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 }
 
 func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
-	respChan := make(chan aliyun.ConsumeMessageResponse)
-	errChan := make(chan error)
+	respChan := make(chan aliyun.ConsumeMessageResponse, 1)
+	errChan := make(chan error, 1)
 
 	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
 		var traceId string
-		h, _ := rqMsg.(*handleMessageRequest)
-
 		hCtx := context.Background()
 		spanCtx := trace.SpanContextFromContext(hCtx)
+		h, _ := rqMsg.(handlerMessage)
 
 		if len(h.AliyunPublication.Message().Headers) > 0 {
 			traceId = h.AliyunPublication.Message().Headers["traceid"]
@@ -317,15 +316,12 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 				hCtx = trace.ContextWithSpanContext(hCtx, spanCtx)
 			}
 		}
-		r.wrapHandleMessage(hCtx, h, sub.handler)
+		r.wrapHandler(hCtx, h, sub.handler)
 	})
 	defer pool.Release()
 
 	go func() {
 		for {
-			if !r.connected {
-				break
-			}
 			// 长轮询消费消息，网络超时时间默认为35s。
 			// 长轮询表示如果Topic没有消息，则客户端请求会在服务端挂起3s，3s内如果有消息可以消费则立即返回响应。
 			// 一次最多消费3条（最多可设置为16条）
@@ -336,9 +332,6 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 
 	go func() {
 		for {
-			if !r.connected {
-				break
-			}
 			select {
 			case resp := <-respChan:
 				{
@@ -346,12 +339,12 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 					var m broker.Message
 					var handles []string
 					var count int
-					h := handleMessageRequest{
-						ResCh: make(chan handleMessageResult, sub.opts.NumOfMessages),
+					h := handlerMessage{
+						ResCh: make(chan handlerResult, sub.opts.NumOfMessages),
 					}
 
 					for _, msg := range resp.Messages {
-						p := &aliyunPublication{
+						p := aliyunPublication{
 							topic:  msg.Message,
 							reader: sub.reader,
 							m:      &m,
@@ -394,7 +387,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 										WithTag(res.Message.Tag),
 										WithKeys([]string{res.Message.Key}),
 									}
-									firstRetryTime, retriedCount, err := r.publishWithBackoffRetry(res.Ctx, res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
+									firstRetryTime, retriedCount, err := r.publishWithBackoffRetry(res.Ctx, &res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
 
 									logMsg := "重试...%s msg:%+v 首次重试时间:%v 最大重试时间:%v 重试次数:%v 最大重试次数:%v"
 									retrySuccess := fmt.Sprintf(logMsg, "mq发送完成", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount)
@@ -430,7 +423,6 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							} else {
 								r.log.Error("ack err =", err)
 							}
-							time.Sleep(time.Duration(3) * time.Second)
 						}
 					}
 				}
@@ -455,9 +447,9 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 	}()
 }
 
-func (r *aliyunBroker) wrapHandleMessage(ctx context.Context, h *handleMessageRequest, handler broker.Handler) {
-	err := handler(ctx, h.AliyunPublication)
-	res := handleMessageResult{
+func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handler broker.Handler) {
+	err := handler(ctx, &h.AliyunPublication)
+	res := handlerResult{
 		Ctx:               ctx,
 		Err:               err,
 		AliyunPublication: h.AliyunPublication,
@@ -466,16 +458,16 @@ func (r *aliyunBroker) wrapHandleMessage(ctx context.Context, h *handleMessageRe
 	h.ResCh <- res
 }
 
-type handleMessageRequest struct {
-	AliyunPublication *aliyunPublication
+type handlerMessage struct {
+	AliyunPublication aliyunPublication
 	Message           message
-	ResCh             chan handleMessageResult
+	ResCh             chan handlerResult
 }
 
-type handleMessageResult struct {
+type handlerResult struct {
 	Ctx               context.Context
 	Err               error
-	AliyunPublication *aliyunPublication
+	AliyunPublication aliyunPublication
 	Message           message
 }
 
