@@ -93,4 +93,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/tx7do/kratos-transport => github.com/BiaoLiu/kratos-transport v1.0.0
+replace github.com/tx7do/kratos-transport => github.com/BiaoLiu/kratos-transport v1.0.1
