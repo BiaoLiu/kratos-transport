@@ -335,7 +335,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 		for {
 			select {
 			case sub.done <- struct{}{}:
-				log.Infof("consume message 接收退出信号...")
+				r.log.Infof("consume message stopping")
 				return
 			case resp := <-respChan:
 				{
@@ -374,7 +374,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 						}
 						h.AliyunPublication = p
 						if err := pool.Invoke(h); err != nil {
-							r.log.Errorf("提交消费处理任务失败 msg:%+v err:%v", msg, err)
+							r.log.Errorf("invoke handler error. msg:%+v err:%v", msg, err)
 							continue
 						}
 						count++
@@ -439,7 +439,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 					if strings.Contains(err.(gerr.ErrCode).Error(), "MessageNotExist") {
 						//r.log.Debug("No new message, continue!")
 					} else {
-						r.log.Error("获取MQ消息失败 err:%v", err)
+						r.log.Error("pull message error. err:%v", err)
 						time.Sleep(time.Duration(3) * time.Second)
 					}
 				}
