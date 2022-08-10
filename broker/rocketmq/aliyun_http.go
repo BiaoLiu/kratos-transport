@@ -138,8 +138,8 @@ func (r *aliyunBroker) Disconnect() error {
 	defer r.Unlock()
 
 	r.client = nil
-
 	r.connected = false
+
 	return nil
 }
 
@@ -318,7 +318,6 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 		}
 		r.wrapHandler(hCtx, h, sub.handler)
 	})
-	defer pool.Release()
 
 	go func() {
 		for {
@@ -331,8 +330,13 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 	}()
 
 	go func() {
+		defer pool.Release()
+
 		for {
 			select {
+			case sub.done <- struct{}{}:
+				log.Infof("consume message 接收退出信号...")
+				return
 			case resp := <-respChan:
 				{
 					var err error
@@ -345,7 +349,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 
 					for _, msg := range resp.Messages {
 						p := aliyunPublication{
-							topic:  msg.Message,
+							topic:  sub.topic,
 							reader: sub.reader,
 							m:      &m,
 							rm:     []string{msg.ReceiptHandle},
@@ -355,11 +359,14 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 
 						if sub.binder != nil {
 							m.Body = sub.binder()
+							if err := broker.Unmarshal(r.opts.Codec, []byte(msg.MessageBody), m.Body); err != nil {
+								p.err = err
+								r.log.Error(err)
+							}
+						} else {
+							m.Body = []byte(msg.MessageBody)
 						}
-						if err := broker.Unmarshal(r.opts.Codec, []byte(msg.MessageBody), m.Body); err != nil {
-							p.err = err
-							r.log.Error(err)
-						}
+
 						h.Message = message{
 							Key:           msg.MessageKey,
 							Tag:           msg.MessageTag,
@@ -440,8 +447,6 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 				{
 					//r.log.Debug("Timeout of consumer message ??")
 				}
-			case sub.done <- struct{}{}:
-				return
 			}
 		}
 	}()

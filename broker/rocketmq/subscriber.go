@@ -1,10 +1,12 @@
 package rocketmq
 
 import (
+	"sync"
+
 	aliyun "github.com/aliyunmq/mq-http-go-sdk"
 	"github.com/apache/rocketmq-client-go/v2"
+
 	"github.com/tx7do/kratos-transport/broker"
-	"sync"
 )
 
 type subscriber struct {
@@ -60,6 +62,7 @@ func (s *aliyunSubscriber) Topic() string {
 
 func (s *aliyunSubscriber) Unsubscribe() error {
 	var err error
+	<-s.done
 	s.Lock()
 	defer s.Unlock()
 	s.closed = true

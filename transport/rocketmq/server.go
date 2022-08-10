@@ -2,13 +2,15 @@ package rocketmq
 
 import (
 	"context"
-	"github.com/go-kratos/kratos/v2/log"
-	"github.com/go-kratos/kratos/v2/transport"
-	"github.com/tx7do/kratos-transport/broker"
-	"github.com/tx7do/kratos-transport/broker/rocketmq"
 	"net/url"
 	"strings"
 	"sync"
+
+	"github.com/go-kratos/kratos/v2/log"
+	"github.com/go-kratos/kratos/v2/transport"
+
+	"github.com/tx7do/kratos-transport/broker"
+	"github.com/tx7do/kratos-transport/broker/rocketmq"
 )
 
 var (
@@ -96,9 +98,13 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) Stop(_ context.Context) error {
+func (s *Server) Stop(ctx context.Context) error {
 	s.log.Info("[rocketmq] server stopping")
 	s.started = false
+
+	for _, sub := range s.subscribers {
+		_ = sub.Unsubscribe()
+	}
 	return s.Disconnect()
 }
 
