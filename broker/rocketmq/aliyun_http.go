@@ -335,7 +335,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 		for {
 			select {
 			case sub.done <- struct{}{}:
-				r.log.Infof("consume message stopping")
+				r.log.Infof("consume message stopping. topic:%v messageTag:%v", sub.topic, sub.opts.MessageTag)
 				return
 			case resp := <-respChan:
 				{

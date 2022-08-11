@@ -2,6 +2,7 @@ package rocketmq
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 	"sync"
@@ -99,12 +100,11 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) Stop(ctx context.Context) error {
-	s.log.Info("[rocketmq] server stopping")
-	s.started = false
-
 	for _, sub := range s.subscribers {
 		_ = sub.Unsubscribe()
 	}
+	s.log.Info("[rocketmq] server stopping")
+	s.started = false
 	return s.Disconnect()
 }
 
@@ -140,7 +140,11 @@ func (s *Server) RegisterSubscriber(ctx context.Context, topic, groupName string
 	if s.started {
 		return s.doRegisterSubscriber(topic, handler, binder, opts...)
 	} else {
-		s.subscriberOpts[topic] = &SubscribeOption{handler: handler, binder: binder, opts: opts}
+		var options broker.SubscribeOptions
+		for _, opt := range opts {
+			opt(&options)
+		}
+		s.subscriberOpts[s.topicKey(topic, options.MessageTag)] = &SubscribeOption{handler: handler, binder: binder, opts: opts}
 	}
 	return nil
 }
@@ -151,15 +155,29 @@ func (s *Server) doRegisterSubscriber(topic string, handler broker.Handler, bind
 		return err
 	}
 
-	s.subscribers[topic] = sub
+	s.subscribers[s.topicKey(topic, sub.Options().MessageTag)] = sub
 
 	return nil
 }
 
 func (s *Server) doRegisterSubscriberMap() error {
-	for topic, opt := range s.subscriberOpts {
+	for topicKey, opt := range s.subscriberOpts {
+		topic, _ := s.parseTopicKey(topicKey)
 		_ = s.doRegisterSubscriber(topic, opt.handler, opt.binder, opt.opts...)
 	}
 	s.subscriberOpts = SubscribeOptionMap{}
 	return nil
+}
+
+func (s *Server) topicKey(topic, messageTag string) string {
+	return fmt.Sprintf("%s:%s", topic, messageTag)
+}
+
+func (s *Server) parseTopicKey(topicKey string) (topic, messageTag string) {
+	keys := strings.Split(topicKey, ":")
+	topic = keys[0]
+	if len(keys) > 1 {
+		messageTag = keys[1]
+	}
+	return topic, messageTag
 }
