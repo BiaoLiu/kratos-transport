@@ -10,6 +10,7 @@ import (
 
 	aliyun "github.com/aliyunmq/mq-http-go-sdk"
 	"github.com/go-kratos/kratos/v2/log"
+	"github.com/go-kratos/kratos/v2/middleware/tracing"
 	gerr "github.com/gogap/errors"
 	"github.com/panjf2000/ants/v2"
 	"github.com/rfyiamcool/backoff"
@@ -302,21 +303,22 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 
 	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
 		var traceId string
-		hCtx := context.Background()
-		spanCtx := trace.SpanContextFromContext(hCtx)
 		h, _ := rqMsg.(handlerMessage)
+		tracer := tracing.NewTracer(trace.SpanKindServer)
 
+		ctx, span := tracer.Start(context.Background(), h.AliyunPublication.topic, nil)
 		if len(h.AliyunPublication.Message().Headers) > 0 {
 			traceId = h.AliyunPublication.Message().Headers["traceid"]
 			if traceId != "" {
 				traceID, err := trace.TraceIDFromHex(traceId)
 				if err == nil {
-					spanCtx = spanCtx.WithTraceID(traceID)
+					spanCtx := span.SpanContext().WithTraceID(traceID)
+					ctx = trace.ContextWithSpanContext(ctx, spanCtx)
 				}
-				hCtx = trace.ContextWithSpanContext(hCtx, spanCtx)
 			}
 		}
-		r.wrapHandler(hCtx, h, sub.handler)
+		r.wrapHandler(ctx, h, sub.handler)
+		tracer.End(ctx, span, nil, nil)
 	})
 
 	go func() {
