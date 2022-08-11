@@ -2,7 +2,7 @@ module github.com/tx7do/kratos-transport/_example/rocketmq
 
 go 1.17
 
-replace github.com/tx7do/kratos-transport v0.0.0-20220809213715-1c444f686418 => github.com/BiaoLiu/kratos-transport v1.0.3
+replace github.com/tx7do/kratos-transport main => github.com/BiaoLiu/kratos-transport v1.0.5
 
 require (
 	github.com/go-kratos/kratos/v2 v2.4.1
@@ -14,12 +14,15 @@ require (
 	github.com/andybalholm/brotli v1.0.4 // indirect
 	github.com/apache/rocketmq-client-go/v2 v2.1.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
+	github.com/go-logr/logr v1.2.3 // indirect
+	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
 	github.com/gogap/errors v0.0.0-20210818113853-edfbba0ddea9 // indirect
 	github.com/gogap/stack v0.0.0-20150131034635-fef68dddd4f8 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/uuid v1.3.0 // indirect
+	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.15.9 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -38,6 +41,8 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.38.0 // indirect
 	go.opentelemetry.io/otel v1.9.0 // indirect
+	go.opentelemetry.io/otel/exporters/jaeger v1.9.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.9.0 // indirect
 	go.opentelemetry.io/otel/trace v1.9.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4 // indirect
