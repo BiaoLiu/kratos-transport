@@ -15,6 +15,7 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/rfyiamcool/backoff"
 	"github.com/spf13/cast"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tx7do/kratos-transport/broker"
@@ -306,7 +307,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 		h, _ := rqMsg.(handlerMessage)
 		tracer := tracing.NewTracer(trace.SpanKindServer)
 
-		ctx, span := tracer.Start(context.Background(), h.AliyunPublication.topic, nil)
+		ctx, span := tracer.Start(context.Background(), h.AliyunPublication.topic, make(propagation.MapCarrier))
 		if len(h.AliyunPublication.Message().Headers) > 0 {
 			traceId = h.AliyunPublication.Message().Headers["traceid"]
 			if traceId != "" {
