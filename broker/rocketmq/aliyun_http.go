@@ -305,9 +305,10 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
 		var traceId string
 		h, _ := rqMsg.(handlerMessage)
-		tracer := tracing.NewTracer(trace.SpanKindServer)
 
+		tracer := tracing.NewTracer(trace.SpanKindServer)
 		ctx, span := tracer.Start(context.Background(), h.AliyunPublication.topic, make(propagation.MapCarrier))
+
 		if len(h.AliyunPublication.Message().Headers) > 0 {
 			traceId = h.AliyunPublication.Message().Headers["traceid"]
 			if traceId != "" {
@@ -318,8 +319,10 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 				}
 			}
 		}
+
+		ctx = NewTraceContext(ctx, tracer)
+		ctx = NewSpanContext(ctx, span)
 		r.wrapHandler(ctx, h, sub.handler)
-		tracer.End(ctx, span, nil, nil)
 	})
 
 	go func() {
@@ -418,6 +421,12 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 								// 提交任务成功，取消息句柄用于回复消息状态
 								handles = append(handles, res.Message.ReceiptHandle)
 							}
+
+							tracer := FromTracerContext(res.Ctx)
+							span := FromSpanContext(res.Ctx)
+							if tracer != nil && span != nil {
+								tracer.End(res.Ctx, span, nil, res.Err)
+							}
 						}
 					}
 					close(h.ResCh)
@@ -435,6 +444,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							}
 						}
 					}
+
 				}
 			case err := <-errChan:
 				{
@@ -448,7 +458,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 				}
 			case <-time.After(35 * time.Second):
 				{
-					//r.log.Debug("Timeout of consumer message ??")
+					r.log.Errorf("timeout of consumer message ??")
 				}
 			}
 		}
@@ -483,4 +493,31 @@ type message struct {
 	Tag           string
 	Key           string
 	ReceiptHandle string
+}
+
+type tracerKey struct{}
+type spanKey struct{}
+
+func NewTraceContext(ctx context.Context, tracer *tracing.Tracer) context.Context {
+	ctx = context.WithValue(ctx, tracerKey{}, tracer)
+	return ctx
+}
+
+func NewSpanContext(ctx context.Context, span trace.Span) context.Context {
+	ctx = context.WithValue(ctx, spanKey{}, span)
+	return ctx
+}
+
+func FromTracerContext(ctx context.Context) *tracing.Tracer {
+	if tracer, ok := ctx.Value(tracerKey{}).(*tracing.Tracer); ok {
+		return tracer
+	}
+	return nil
+}
+
+func FromSpanContext(ctx context.Context) trace.Span {
+	if span, ok := ctx.Value(spanKey{}).(trace.Span); ok {
+		return span
+	}
+	return nil
 }
