@@ -220,7 +220,7 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 // maxRetryTime 最大重试时间
 // minDelay 初始重试时间
 // factor 指数退避重试算法指数值
-func (r *aliyunBroker) publishWithBackoffRetry(ctx context.Context, msg *aliyunPublication, consumeRetry *broker.ConsumeRetry, opts ...broker.PublishOption) (string, int64, error) {
+func (r *aliyunBroker) publishWithBackoffRetry(msg *aliyunPublication, consumeRetry *broker.ConsumeRetry, opts ...broker.PublishOption) (string, int64, error) {
 	var firstRetryTime int64
 	var retriedCount int64
 	if consumeRetry == nil {
@@ -230,6 +230,13 @@ func (r *aliyunBroker) publishWithBackoffRetry(ctx context.Context, msg *aliyunP
 		firstRetryTime = cast.ToInt64(msg.Message().Headers[FirstRetryTime])
 		retriedCount = cast.ToInt64(msg.Message().Headers[RetriedCount])
 	}
+	options := broker.PublishOptions{
+		Context: context.Background(),
+	}
+	for _, o := range opts {
+		o(&options)
+	}
+
 	b := backoff.NewBackOff(
 		backoff.WithMinDelay(consumeRetry.MinDelay),
 		backoff.WithMaxDelay(consumeRetry.MaxRetryTime),
@@ -245,7 +252,6 @@ func (r *aliyunBroker) publishWithBackoffRetry(ctx context.Context, msg *aliyunP
 	retry := broker.NewRetry(firstRetryTime, retriedCount, consumeRetry.MaxRetryCount, consumeRetry.MaxRetryTime)
 	err := retry.Do(func(firstRetryTime int64, retriedCount int64) error {
 		m := map[string]string{
-			broker.TraceID: broker.TraceIDFromContext(ctx),
 			FirstRetryTime: cast.ToString(firstRetryTime),
 			RetriedCount:   cast.ToString(retriedCount),
 		}
@@ -259,7 +265,7 @@ func (r *aliyunBroker) publishWithBackoffRetry(ctx context.Context, msg *aliyunP
 	if err != nil {
 		if errors.Is(err, broker.ErrMaxRetryTime) || errors.Is(err, broker.ErrMaxRetryCount) {
 			if consumeRetry.HandleRetryEnd != nil {
-				consumeRetry.HandleRetryEnd(ctx, msg)
+				consumeRetry.HandleRetryEnd(options.Context, msg)
 			}
 		}
 	}
@@ -389,10 +395,11 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 
 								if sub.opts.ConsumeRetry != nil {
 									opts := []broker.PublishOption{
+										broker.WithPublishContext(res.Ctx),
 										WithTag(res.Message.Tag),
 										WithKeys([]string{res.Message.Key}),
 									}
-									firstRetryTime, retriedCount, retryErr := r.publishWithBackoffRetry(res.Ctx, &res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
+									firstRetryTime, retriedCount, retryErr := r.publishWithBackoffRetry(&res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
 
 									logMsg := "重试...%s msg:%+v 首次重试时间:%v 最大重试时间:%v 重试次数:%v 最大重试次数:%v"
 									retrySuccess := fmt.Sprintf(logMsg, "mq发送完成", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount)
