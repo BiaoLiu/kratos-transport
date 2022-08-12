@@ -310,7 +310,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 
 		ctx := context.Background()
 		if sub.opts.EnableTrace {
-			broker.StartTrace(ctx, sub.topic, h.AliyunPublication.Message().Headers, nil)
+			ctx = broker.StartTrace(ctx, sub.topic, h.AliyunPublication.Message().Headers, nil)
 		}
 		r.wrapHandler(ctx, h, sub.handler)
 	})

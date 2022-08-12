@@ -31,7 +31,7 @@ func ContextWithMessageHeader(ctx context.Context, header Headers) context.Conte
 	return ctx
 }
 
-func StartTrace(ctx context.Context, operation string, header Headers, carrier propagation.TextMapCarrier) (context.Context, trace.Span) {
+func StartTrace(ctx context.Context, operation string, header Headers, carrier propagation.TextMapCarrier) context.Context {
 	ctx = ContextWithMessageHeader(ctx, header)
 	tracer := tracing.NewTracer(trace.SpanKindServer)
 	if carrier == nil {
@@ -40,7 +40,7 @@ func StartTrace(ctx context.Context, operation string, header Headers, carrier p
 	ctx, span := tracer.Start(ctx, operation, carrier)
 	ctx = newTraceContext(ctx, tracer)
 	ctx = newSpanContext(ctx, span)
-	return ctx, span
+	return ctx
 }
 
 func EndTrace(ctx context.Context, err error) {
