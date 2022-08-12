@@ -407,7 +407,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							//   2.未配置重试策略，不进行ack响应，依赖mq的重试
 							if res.Err != nil {
 								err = res.Err
-								r.log.Error(res.Err)
+								r.log.WithContext(res.Ctx).Error(res.Err)
 
 								if sub.opts.ConsumeRetry != nil {
 									opts := []broker.PublishOption{
@@ -425,10 +425,10 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 										if errors.Is(err, broker.ErrMaxRetryCount) || errors.Is(err, broker.ErrMaxRetryTime) {
 											handles = append(handles, res.Message.ReceiptHandle)
 										}
-										r.log.Errorf(retryFail)
+										r.log.WithContext(res.Ctx).Errorf(retryFail)
 									} else {
 										handles = append(handles, res.Message.ReceiptHandle)
-										r.log.Infof(retrySuccess)
+										r.log.WithContext(res.Ctx).Infof(retrySuccess)
 									}
 								}
 							} else {
