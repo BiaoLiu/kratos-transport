@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-kratos/kratos/v2/encoding"
 	"github.com/go-kratos/kratos/v2/log"
+
 	"github.com/tx7do/kratos-transport/broker"
 	"github.com/tx7do/kratos-transport/broker/rocketmq"
 )
@@ -23,6 +24,7 @@ func WithTLSConfig(c *tls.Config) ServerOption {
 func WithLogger(logger log.Logger) ServerOption {
 	return func(s *Server) {
 		s.log = log.NewHelper(logger)
+		log.SetLogger(logger)
 	}
 }
 
