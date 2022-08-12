@@ -312,18 +312,24 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 		var traceId string
 		h, _ := rqMsg.(handlerMessage)
 
-		tracer := tracing.NewTracer(trace.SpanKindServer)
-		ctx, span := tracer.Start(context.Background(), h.AliyunPublication.topic, make(propagation.MapCarrier))
-
+		ctx := context.Background()
 		if len(h.AliyunPublication.Message().Headers) > 0 {
 			if traceId = h.AliyunPublication.Message().Headers[TraceID]; traceId != "" {
 				traceID, err := trace.TraceIDFromHex(traceId)
 				if err == nil {
-					spanCtx := span.SpanContext().WithTraceID(traceID)
-					ctx = trace.ContextWithSpanContext(ctx, spanCtx)
+					spanContextConfig := trace.SpanContextConfig{
+						TraceID:    traceID,
+						TraceFlags: 01,
+						Remote:     false,
+					}
+					spanContext := trace.NewSpanContext(spanContextConfig)
+					ctx = trace.ContextWithSpanContext(ctx, spanContext)
 				}
 			}
 		}
+
+		tracer := tracing.NewTracer(trace.SpanKindServer)
+		ctx, span := tracer.Start(ctx, h.AliyunPublication.topic, make(propagation.MapCarrier))
 
 		ctx = NewTraceContext(ctx, tracer)
 		ctx = NewSpanContext(ctx, span)
