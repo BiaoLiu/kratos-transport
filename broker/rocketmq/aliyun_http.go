@@ -10,19 +10,16 @@ import (
 
 	aliyun "github.com/aliyunmq/mq-http-go-sdk"
 	"github.com/go-kratos/kratos/v2/log"
-	"github.com/go-kratos/kratos/v2/middleware/tracing"
 	gerr "github.com/gogap/errors"
 	"github.com/panjf2000/ants/v2"
 	"github.com/rfyiamcool/backoff"
 	"github.com/spf13/cast"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tx7do/kratos-transport/broker"
 )
 
 const (
-	TraceID        = "traceid"
 	FirstRetryTime = "first_retry_time"
 	RetriedCount   = "retried_count"
 )
@@ -249,7 +246,7 @@ func (r *aliyunBroker) publishWithBackoffRetry(ctx context.Context, msg *aliyunP
 	retry := broker.NewRetry(firstRetryTime, retriedCount, consumeRetry.MaxRetryCount, consumeRetry.MaxRetryTime)
 	err := retry.Do(func(firstRetryTime int64, retriedCount int64) error {
 		m := map[string]string{
-			TraceID:        traceId,
+			broker.TraceID: traceId,
 			FirstRetryTime: cast.ToString(firstRetryTime),
 			RetriedCount:   cast.ToString(retriedCount),
 		}
@@ -309,30 +306,12 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 	errChan := make(chan error, 1)
 
 	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
-		var traceId string
 		h, _ := rqMsg.(handlerMessage)
 
 		ctx := context.Background()
-		if len(h.AliyunPublication.Message().Headers) > 0 {
-			if traceId = h.AliyunPublication.Message().Headers[TraceID]; traceId != "" {
-				traceID, err := trace.TraceIDFromHex(traceId)
-				if err == nil {
-					spanContextConfig := trace.SpanContextConfig{
-						TraceID:    traceID,
-						TraceFlags: 01,
-						Remote:     false,
-					}
-					spanContext := trace.NewSpanContext(spanContextConfig)
-					ctx = trace.ContextWithSpanContext(ctx, spanContext)
-				}
-			}
+		if sub.opts.EnableTrace {
+			broker.StartTrace(ctx, sub.topic, h.AliyunPublication.Message().Headers, nil)
 		}
-
-		tracer := tracing.NewTracer(trace.SpanKindServer)
-		ctx, span := tracer.Start(ctx, h.AliyunPublication.topic, make(propagation.MapCarrier))
-
-		ctx = NewTraceContext(ctx, tracer)
-		ctx = NewSpanContext(ctx, span)
 		r.wrapHandler(ctx, h, sub.handler)
 	})
 
@@ -436,10 +415,8 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 								handles = append(handles, res.Message.ReceiptHandle)
 							}
 
-							tracer := FromTracerContext(res.Ctx)
-							span := FromSpanContext(res.Ctx)
-							if tracer != nil && span != nil {
-								tracer.End(res.Ctx, span, nil, err)
+							if sub.opts.EnableTrace {
+								broker.EndTrace(res.Ctx, err)
 							}
 						}
 					}
@@ -507,31 +484,4 @@ type message struct {
 	Tag           string
 	Key           string
 	ReceiptHandle string
-}
-
-type tracerKey struct{}
-type spanKey struct{}
-
-func NewTraceContext(ctx context.Context, tracer *tracing.Tracer) context.Context {
-	ctx = context.WithValue(ctx, tracerKey{}, tracer)
-	return ctx
-}
-
-func NewSpanContext(ctx context.Context, span trace.Span) context.Context {
-	ctx = context.WithValue(ctx, spanKey{}, span)
-	return ctx
-}
-
-func FromTracerContext(ctx context.Context) *tracing.Tracer {
-	if tracer, ok := ctx.Value(tracerKey{}).(*tracing.Tracer); ok {
-		return tracer
-	}
-	return nil
-}
-
-func FromSpanContext(ctx context.Context) trace.Span {
-	if span, ok := ctx.Value(spanKey{}).(trace.Span); ok {
-		return span
-	}
-	return nil
 }

@@ -164,6 +164,7 @@ type SubscribeOptions struct {
 	AutoAck       bool
 	Queue         string
 	Context       context.Context
+	EnableTrace   bool
 	MessageTag    string
 	NumOfMessages int
 	ConsumeRetry  *ConsumeRetry
@@ -195,6 +196,12 @@ func SubscribeContextWithValue(k, v interface{}) SubscribeOption {
 			o.Context = context.Background()
 		}
 		o.Context = context.WithValue(o.Context, k, v)
+	}
+}
+
+func EnableTrace() SubscribeOption {
+	return func(o *SubscribeOptions) {
+		o.EnableTrace = true
 	}
 }
 
