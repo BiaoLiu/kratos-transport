@@ -31,6 +31,14 @@ func ContextWithMessageHeader(ctx context.Context, header Headers) context.Conte
 	return ctx
 }
 
+func TraceIDFromContext(ctx context.Context) string {
+	var traceId string
+	if span := trace.SpanContextFromContext(ctx); span.HasTraceID() {
+		traceId = span.TraceID().String()
+	}
+	return traceId
+}
+
 func StartTrace(ctx context.Context, operation string, header Headers, carrier propagation.TextMapCarrier) context.Context {
 	ctx = ContextWithMessageHeader(ctx, header)
 	tracer := tracing.NewTracer(trace.SpanKindServer)

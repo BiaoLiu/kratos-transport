@@ -14,7 +14,6 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/rfyiamcool/backoff"
 	"github.com/spf13/cast"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tx7do/kratos-transport/broker"
 )
@@ -202,6 +201,10 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 	if v, ok := options.Context.Value(shardingKeyKey{}).(string); ok {
 		aMsg.ShardingKey = v
 	}
+	if aMsg.Properties == nil {
+		aMsg.Properties = make(map[string]string)
+	}
+	aMsg.Properties[broker.TraceID] = broker.TraceIDFromContext(options.Context)
 
 	_, err := p.PublishMessage(aMsg)
 	if err != nil {
@@ -239,14 +242,10 @@ func (r *aliyunBroker) publishWithBackoffRetry(ctx context.Context, msg *aliyunP
 	delay := b.Duration()
 	opts = append(opts, WithDelayTimeLevel(int(delay.Milliseconds())))
 
-	var traceId string
-	if span := trace.SpanContextFromContext(ctx); span.HasTraceID() {
-		traceId = span.TraceID().String()
-	}
 	retry := broker.NewRetry(firstRetryTime, retriedCount, consumeRetry.MaxRetryCount, consumeRetry.MaxRetryTime)
 	err := retry.Do(func(firstRetryTime int64, retriedCount int64) error {
 		m := map[string]string{
-			broker.TraceID: traceId,
+			broker.TraceID: broker.TraceIDFromContext(ctx),
 			FirstRetryTime: cast.ToString(firstRetryTime),
 			RetriedCount:   cast.ToString(retriedCount),
 		}
