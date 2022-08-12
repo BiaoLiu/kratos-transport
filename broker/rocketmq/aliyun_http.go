@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	TraceID        = "traceid"
 	FirstRetryTime = "first_retry_time"
 	RetriedCount   = "retried_count"
 )
@@ -241,9 +242,14 @@ func (r *aliyunBroker) publishWithBackoffRetry(ctx context.Context, msg *aliyunP
 	delay := b.Duration()
 	opts = append(opts, WithDelayTimeLevel(int(delay.Milliseconds())))
 
+	var traceId string
+	if span := trace.SpanContextFromContext(ctx); span.HasTraceID() {
+		traceId = span.TraceID().String()
+	}
 	retry := broker.NewRetry(firstRetryTime, retriedCount, consumeRetry.MaxRetryCount, consumeRetry.MaxRetryTime)
 	err := retry.Do(func(firstRetryTime int64, retriedCount int64) error {
 		m := map[string]string{
+			TraceID:        traceId,
 			FirstRetryTime: cast.ToString(firstRetryTime),
 			RetriedCount:   cast.ToString(retriedCount),
 		}
@@ -310,8 +316,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 		ctx, span := tracer.Start(context.Background(), h.AliyunPublication.topic, make(propagation.MapCarrier))
 
 		if len(h.AliyunPublication.Message().Headers) > 0 {
-			traceId = h.AliyunPublication.Message().Headers["traceid"]
-			if traceId != "" {
+			if traceId = h.AliyunPublication.Message().Headers[TraceID]; traceId != "" {
 				traceID, err := trace.TraceIDFromHex(traceId)
 				if err == nil {
 					spanCtx := span.SpanContext().WithTraceID(traceID)
@@ -395,26 +400,29 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							//   1.已配置重试策略，重试发布消息失败，不进行ack响应，依赖mq的重试
 							//   2.未配置重试策略，不进行ack响应，依赖mq的重试
 							if res.Err != nil {
+								err = res.Err
+								r.log.WithContext(res.Ctx).Error(res.Err)
+
 								if sub.opts.ConsumeRetry != nil {
 									opts := []broker.PublishOption{
 										WithTag(res.Message.Tag),
 										WithKeys([]string{res.Message.Key}),
 									}
-									firstRetryTime, retriedCount, err := r.publishWithBackoffRetry(res.Ctx, &res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
+									firstRetryTime, retriedCount, retryErr := r.publishWithBackoffRetry(res.Ctx, &res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
 
 									logMsg := "重试...%s msg:%+v 首次重试时间:%v 最大重试时间:%v 重试次数:%v 最大重试次数:%v"
 									retrySuccess := fmt.Sprintf(logMsg, "mq发送完成", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount)
-									retryFail := fmt.Sprintf(logMsg+" err:%v", "mq发送失败", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount, err)
+									retryFail := fmt.Sprintf(logMsg+" err:%v", "mq发送失败", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount, retryErr)
 
-									switch err {
-									case nil:
+									if retryErr != nil {
+										err = retryErr
+										if errors.Is(err, broker.ErrMaxRetryCount) || errors.Is(err, broker.ErrMaxRetryTime) {
+											handles = append(handles, res.Message.ReceiptHandle)
+										}
+										r.log.WithContext(res.Ctx).Errorf(retryFail)
+									} else {
 										handles = append(handles, res.Message.ReceiptHandle)
 										r.log.WithContext(res.Ctx).Infof(retrySuccess)
-									case broker.ErrMaxRetryCount, broker.ErrMaxRetryTime:
-										handles = append(handles, res.Message.ReceiptHandle)
-										r.log.WithContext(res.Ctx).Errorf(retryFail)
-									default:
-										r.log.WithContext(res.Ctx).Errorf(retryFail)
 									}
 								}
 							} else {
@@ -425,7 +433,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							tracer := FromTracerContext(res.Ctx)
 							span := FromSpanContext(res.Ctx)
 							if tracer != nil && span != nil {
-								tracer.End(res.Ctx, span, nil, res.Err)
+								tracer.End(res.Ctx, span, nil, err)
 							}
 						}
 					}
