@@ -1,7 +1,6 @@
 package rocketmq
 
 import (
-	"github.com/go-kratos/kratos/v2/selector"
 	"github.com/go-kratos/kratos/v2/transport"
 )
 
@@ -17,7 +16,6 @@ type Transport struct {
 	operation   string
 	reqHeader   headerCarrier
 	replyHeader headerCarrier
-	filters     []selector.Filter
 }
 
 // Kind returns the transport kind.
@@ -43,11 +41,6 @@ func (tr *Transport) RequestHeader() transport.Header {
 // ReplyHeader returns the reply header.
 func (tr *Transport) ReplyHeader() transport.Header {
 	return tr.replyHeader
-}
-
-// SelectFilters returns the client select filters.
-func (tr *Transport) SelectFilters() []selector.Filter {
-	return tr.filters
 }
 
 type headerCarrier struct{}
