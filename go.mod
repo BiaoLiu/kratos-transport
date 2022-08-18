@@ -6,7 +6,7 @@ require (
 	github.com/aliyunmq/mq-http-go-sdk v1.0.3
 	github.com/apache/rocketmq-client-go/v2 v2.1.1
 	github.com/eclipse/paho.mqtt.golang v1.4.1
-	github.com/go-kratos/kratos/v2 v2.4.1
+	github.com/go-kratos/kratos/v2 v2.5.0
 	github.com/gogap/errors v0.0.0-20210818113853-edfbba0ddea9
 	github.com/gomodule/redigo v1.8.9
 	github.com/google/uuid v1.3.0
