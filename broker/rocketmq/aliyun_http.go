@@ -313,7 +313,12 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 
 	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
 		h, _ := rqMsg.(handlerMessage)
-		r.wrapHandler(context.Background(), h, sub.handler, sub)
+
+		ctx := context.Background()
+		if sub.opts.EnableTrace {
+			ctx = broker.StartTrace(ctx, sub.topic, h.AliyunPublication.Message().Headers, nil)
+		}
+		r.wrapHandler(ctx, h, sub.handler)
 	})
 
 	go func() {
@@ -338,6 +343,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 				{
 					var m broker.Message
 					var handles []string
+					var err error
 					var count int
 					resCh := make(chan handlerResult, sub.opts.NumOfMessages)
 
@@ -388,6 +394,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							//   1.已配置重试策略，重试发布消息失败，不进行ack响应，依赖mq的重试
 							//   2.未配置重试策略，不进行ack响应，依赖mq的重试
 							if res.Err != nil {
+								err = res.Err
 								r.log.WithContext(res.Ctx).Error(res.Err)
 
 								if sub.opts.ConsumeRetry != nil {
@@ -396,14 +403,15 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 										WithTag(res.Message.Tag),
 										WithKeys([]string{res.Message.Key}),
 									}
-									firstRetryTime, retriedCount, err := r.publishWithBackoffRetry(&res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
+									firstRetryTime, retriedCount, retryErr := r.publishWithBackoffRetry(&res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
 
 									logMsg := "重试...%s msg:%+v 首次重试时间:%v 最大重试时间:%v 重试次数:%v 最大重试次数:%v"
 									retrySuccess := fmt.Sprintf(logMsg, "mq发送完成", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount)
-									retryFail := fmt.Sprintf(logMsg+" err:%v", "mq发送失败", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount, err)
+									retryFail := fmt.Sprintf(logMsg+" err:%v", "mq发送失败", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount, retryErr)
 
-									if err != nil {
-										if errors.Is(err, broker.ErrMaxRetryCount) || errors.Is(err, broker.ErrMaxRetryTime) {
+									if retryErr != nil {
+										err = retryErr
+										if errors.Is(retryErr, broker.ErrMaxRetryCount) || errors.Is(retryErr, broker.ErrMaxRetryTime) {
 											handles = append(handles, res.Message.ReceiptHandle)
 										}
 										r.log.WithContext(res.Ctx).Errorf(retryFail)
@@ -416,9 +424,12 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 								// 提交任务成功，取消息句柄用于回复消息状态
 								handles = append(handles, res.Message.ReceiptHandle)
 							}
+
+							if sub.opts.EnableTrace {
+								broker.EndTrace(res.Ctx, err)
+							}
 						}
 					}
-					close(resCh)
 
 					if sub.opts.AutoAck {
 						if err := sub.reader.AckMessage(handles); err != nil {
@@ -429,7 +440,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 										errAckItem.ErrorHandle, errAckItem.ErrorCode, errAckItem.ErrorMsg)
 								}
 							} else {
-								r.log.Error("ack error. err:%v", err)
+								r.log.Errorf("ack error. err:%v", err)
 							}
 						}
 					}
@@ -441,7 +452,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 					if strings.Contains(err.(gerr.ErrCode).Error(), "MessageNotExist") {
 						//r.log.Debug("No new message, continue!")
 					} else {
-						r.log.Error("pull message error. err:%v", err)
+						r.log.Errorf("pull message error. err:%v", err)
 						time.Sleep(time.Duration(3) * time.Second)
 					}
 				}
@@ -454,27 +465,12 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 	}()
 }
 
-func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handler broker.Handler, sub *aliyunSubscriber) {
+func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handler broker.Handler) {
 	res := handlerResult{
 		Ctx:               ctx,
 		Message:           h.Message,
 		AliyunPublication: h.AliyunPublication,
 	}
-
-	if sub.opts.EnableTrace {
-		ctx = broker.StartTrace(ctx, sub.topic, h.AliyunPublication.Message().Headers, nil)
-		defer func() {
-			broker.EndTrace(ctx, res.Err)
-		}()
-	}
-
-	defer func() {
-		if err := recover(); err != nil {
-			res.Err = fmt.Errorf("%v", err)
-			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
-		}
-	}()
-
 	res.Err = handler(ctx, &h.AliyunPublication)
 	h.ResCh <- res
 }
