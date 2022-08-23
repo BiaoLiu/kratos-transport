@@ -290,7 +290,7 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 		options.NumOfMessages = 3
 	}
 
-	mqConsumer := r.client.GetConsumer(r.instanceName, topic, options.Queue, options.MessageTag)
+	mqConsumer := r.client.GetConsumer(r.instanceName, topic, options.Queue, "")
 
 	sub := &aliyunSubscriber{
 		opts:    options,
@@ -309,15 +309,11 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 	respChan := make(chan aliyun.ConsumeMessageResponse, 1)
 	errChan := make(chan error, 1)
+	ticker := time.NewTicker(5 * time.Minute)
 
 	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
 		h, _ := rqMsg.(handlerMessage)
-
-		ctx := context.Background()
-		if sub.opts.EnableTrace {
-			ctx = broker.StartTrace(ctx, sub.topic, h.AliyunPublication.Message().Headers, nil)
-		}
-		r.wrapHandler(ctx, h, sub.handler)
+		r.wrapHandler(context.Background(), h, sub.handler, sub)
 	})
 
 	go func() {
@@ -336,19 +332,19 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 		for {
 			select {
 			case sub.done <- struct{}{}:
-				r.log.Infof("consume message stopping. topic:%v messageTag:%v", sub.topic, sub.opts.MessageTag)
+				r.log.Infof("consume message stopping. topic:%v", sub.topic)
 				return
 			case resp := <-respChan:
 				{
-					var err error
 					var m broker.Message
 					var handles []string
 					var count int
-					h := handlerMessage{
-						ResCh: make(chan handlerResult, sub.opts.NumOfMessages),
-					}
+					resCh := make(chan handlerResult, sub.opts.NumOfMessages)
 
 					for _, msg := range resp.Messages {
+						h := handlerMessage{
+							ResCh: resCh,
+						}
 						p := aliyunPublication{
 							topic:  sub.topic,
 							reader: sub.reader,
@@ -381,16 +377,17 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 						count++
 					}
 
+				end:
 					for i := 0; i < count; i++ {
 						select {
-						//case <-ticker.C:
-						//	LogInfo("消费消息超时")
-						case res := <-h.ResCh:
+						case <-ticker.C:
+							r.log.Error("consume message timeout")
+							break end
+						case res := <-resCh:
 							// 消息消费失败:
 							//   1.已配置重试策略，重试发布消息失败，不进行ack响应，依赖mq的重试
 							//   2.未配置重试策略，不进行ack响应，依赖mq的重试
 							if res.Err != nil {
-								err = res.Err
 								r.log.WithContext(res.Ctx).Error(res.Err)
 
 								if sub.opts.ConsumeRetry != nil {
@@ -399,14 +396,13 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 										WithTag(res.Message.Tag),
 										WithKeys([]string{res.Message.Key}),
 									}
-									firstRetryTime, retriedCount, retryErr := r.publishWithBackoffRetry(&res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
+									firstRetryTime, retriedCount, err := r.publishWithBackoffRetry(&res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
 
 									logMsg := "重试...%s msg:%+v 首次重试时间:%v 最大重试时间:%v 重试次数:%v 最大重试次数:%v"
 									retrySuccess := fmt.Sprintf(logMsg, "mq发送完成", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount)
-									retryFail := fmt.Sprintf(logMsg+" err:%v", "mq发送失败", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount, retryErr)
+									retryFail := fmt.Sprintf(logMsg+" err:%v", "mq发送失败", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount, err)
 
-									if retryErr != nil {
-										err = retryErr
+									if err != nil {
 										if errors.Is(err, broker.ErrMaxRetryCount) || errors.Is(err, broker.ErrMaxRetryTime) {
 											handles = append(handles, res.Message.ReceiptHandle)
 										}
@@ -420,16 +416,12 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 								// 提交任务成功，取消息句柄用于回复消息状态
 								handles = append(handles, res.Message.ReceiptHandle)
 							}
-
-							if sub.opts.EnableTrace {
-								broker.EndTrace(res.Ctx, err)
-							}
 						}
 					}
-					close(h.ResCh)
+					close(resCh)
 
 					if sub.opts.AutoAck {
-						if err = sub.reader.AckMessage(handles); err != nil {
+						if err := sub.reader.AckMessage(handles); err != nil {
 							// 某些消息的句柄可能超时，会导致消息消费状态确认不成功。
 							if errAckItems, ok := err.(gerr.ErrCode).Context()["Detail"].([]aliyun.ErrAckItem); ok {
 								for _, errAckItem := range errAckItems {
@@ -437,7 +429,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 										errAckItem.ErrorHandle, errAckItem.ErrorCode, errAckItem.ErrorMsg)
 								}
 							} else {
-								r.log.Error("ack err =", err)
+								r.log.Error("ack error. err:%v", err)
 							}
 						}
 					}
@@ -462,28 +454,42 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 	}()
 }
 
-func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handler broker.Handler) {
-	err := handler(ctx, &h.AliyunPublication)
+func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handler broker.Handler, sub *aliyunSubscriber) {
 	res := handlerResult{
 		Ctx:               ctx,
-		Err:               err,
-		AliyunPublication: h.AliyunPublication,
 		Message:           h.Message,
+		AliyunPublication: h.AliyunPublication,
 	}
+
+	if sub.opts.EnableTrace {
+		ctx = broker.StartTrace(ctx, sub.topic, h.AliyunPublication.Message().Headers, nil)
+		defer func() {
+			broker.EndTrace(ctx, res.Err)
+		}()
+	}
+
+	defer func() {
+		if err := recover(); err != nil {
+			res.Err = fmt.Errorf("%v", err)
+			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
+		}
+	}()
+
+	res.Err = handler(ctx, &h.AliyunPublication)
 	h.ResCh <- res
 }
 
 type handlerMessage struct {
-	AliyunPublication aliyunPublication
-	Message           message
 	ResCh             chan handlerResult
+	Message           message
+	AliyunPublication aliyunPublication
 }
 
 type handlerResult struct {
 	Ctx               context.Context
 	Err               error
-	AliyunPublication aliyunPublication
 	Message           message
+	AliyunPublication aliyunPublication
 }
 
 type message struct {
