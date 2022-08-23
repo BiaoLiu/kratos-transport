@@ -21,6 +21,10 @@ import (
 const (
 	FirstRetryTime = "first_retry_time"
 	RetriedCount   = "retried_count"
+
+	MessageId  = "message_id"
+	MessageKey = "message_key"
+	MessageTag = "message_tag"
 )
 
 type aliyunBroker struct {
@@ -359,6 +363,13 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							ctx:    r.opts.Context,
 						}
 						m.Headers = msg.Properties
+						if m.Headers == nil {
+							m.Headers = make(map[string]string)
+						} else {
+							m.Headers[MessageId] = msg.MessageId
+							m.Headers[MessageKey] = msg.MessageKey
+							m.Headers[MessageTag] = msg.MessageTag
+						}
 
 						if sub.binder != nil {
 							m.Body = sub.binder()
