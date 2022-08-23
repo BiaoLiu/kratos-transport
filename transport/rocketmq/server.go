@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/transport"
@@ -144,7 +145,7 @@ func (s *Server) RegisterSubscriber(ctx context.Context, topic, groupName string
 		for _, opt := range opts {
 			opt(&options)
 		}
-		s.subscriberOpts[s.topicKey(topic, options.MessageTag)] = &SubscribeOption{handler: handler, binder: binder, opts: opts}
+		s.subscriberOpts[s.topicKey(topic)] = &SubscribeOption{handler: handler, binder: binder, opts: opts}
 	}
 	return nil
 }
@@ -155,7 +156,7 @@ func (s *Server) doRegisterSubscriber(topic string, handler broker.Handler, bind
 		return err
 	}
 
-	s.subscribers[s.topicKey(topic, sub.Options().MessageTag)] = sub
+	s.subscribers[s.topicKey(topic)] = sub
 
 	return nil
 }
@@ -169,8 +170,8 @@ func (s *Server) doRegisterSubscriberMap() error {
 	return nil
 }
 
-func (s *Server) topicKey(topic, messageTag string) string {
-	return fmt.Sprintf("%s:%s", topic, messageTag)
+func (s *Server) topicKey(topic string) string {
+	return fmt.Sprintf("%s:%d", topic, time.Now().UnixMicro())
 }
 
 func (s *Server) parseTopicKey(topicKey string) (topic, messageTag string) {
