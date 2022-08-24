@@ -483,13 +483,13 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 }
 
 func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handler broker.Handler) {
-	res := handlerResult{
-		Ctx:               ctx,
-		Message:           h.Message,
-		AliyunPublication: h.AliyunPublication,
-	}
+	var res handlerResult
 
 	defer func() {
+		res.Ctx = ctx
+		res.Message = h.Message
+		res.AliyunPublication = h.AliyunPublication
+
 		if err := recover(); err != nil {
 			res.Err = fmt.Errorf("%v", err)
 			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
