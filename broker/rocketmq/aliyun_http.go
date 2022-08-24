@@ -489,15 +489,23 @@ func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handle
 		AliyunPublication: h.AliyunPublication,
 	}
 
-	//defer func() {
-	//	if err := recover(); err != nil {
-	//		res.Err = fmt.Errorf("%v", err)
-	//		r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
-	//	}
-	//}()
-
+	defer func() {
+		if err := recover(); err != nil {
+			res.Err = fmt.Errorf("%v", err)
+			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
+		}
+		r.sendHandlerResult(ctx, h.ResCh, res)
+	}()
 	res.Err = handler(ctx, &h.AliyunPublication)
-	h.ResCh <- res
+}
+
+func (r *aliyunBroker) sendHandlerResult(ctx context.Context, resCh chan<- handlerResult, res handlerResult) {
+	defer func() {
+		if err := recover(); err != nil {
+			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", res.AliyunPublication, err)
+		}
+	}()
+	resCh <- res
 }
 
 type handlerMessage struct {

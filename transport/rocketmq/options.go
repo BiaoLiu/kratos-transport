@@ -23,8 +23,8 @@ func WithTLSConfig(c *tls.Config) ServerOption {
 
 func WithLogger(logger log.Logger) ServerOption {
 	return func(s *Server) {
-		s.log = log.NewHelper(logger)
-		log.SetLogger(logger)
+		s.log = log.NewHelper(logger, log.WithMessageKey("[rocketmq]"))
+		s.bOpts = append(s.bOpts, broker.WithLogger(s.log))
 	}
 }
 
