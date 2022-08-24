@@ -483,30 +483,21 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 }
 
 func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handler broker.Handler) {
-	var res handlerResult
+	res := handlerResult{
+		Ctx:               ctx,
+		Message:           h.Message,
+		AliyunPublication: h.AliyunPublication,
+	}
 
-	defer func() {
-		res.Ctx = ctx
-		res.Message = h.Message
-		res.AliyunPublication = h.AliyunPublication
-
-		if err := recover(); err != nil {
-			res.Err = fmt.Errorf("%v", err)
-			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
-		}
-		r.sendHandlerResult(ctx, h.ResCh, res)
-	}()
+	//defer func() {
+	//	if err := recover(); err != nil {
+	//		res.Err = fmt.Errorf("%v", err)
+	//		r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
+	//	}
+	//}()
 
 	res.Err = handler(ctx, &h.AliyunPublication)
-}
-
-func (r *aliyunBroker) sendHandlerResult(ctx context.Context, resCh chan<- handlerResult, res handlerResult) {
-	defer func() {
-		if err := recover(); err != nil {
-			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", res.AliyunPublication, err)
-		}
-	}()
-	resCh <- res
+	h.ResCh <- res
 }
 
 type handlerMessage struct {
