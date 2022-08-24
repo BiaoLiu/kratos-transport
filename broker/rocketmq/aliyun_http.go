@@ -441,6 +441,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							}
 						}
 					}
+					close(resCh)
 
 					if sub.opts.AutoAck {
 						if err := sub.reader.AckMessage(handles); err != nil {
@@ -455,7 +456,6 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							}
 						}
 					}
-
 				}
 			case err := <-errChan:
 				{
@@ -488,10 +488,19 @@ func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handle
 			res.Err = fmt.Errorf("%v", err)
 			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
 		}
+		r.sendHandlerResult(ctx, h.ResCh, res)
 	}()
 
 	res.Err = handler(ctx, &h.AliyunPublication)
-	h.ResCh <- res
+}
+
+func (r *aliyunBroker) sendHandlerResult(ctx context.Context, resCh chan<- handlerResult, res handlerResult) {
+	defer func() {
+		if err := recover(); err != nil {
+			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", res.AliyunPublication, err)
+		}
+	}()
+	resCh <- res
 }
 
 type handlerMessage struct {
