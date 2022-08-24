@@ -161,13 +161,14 @@ type ConsumeRetry struct {
 }
 
 type SubscribeOptions struct {
-	AutoAck       bool
-	Queue         string
-	Context       context.Context
-	MessageTag    string
-	EnableTrace   bool
-	NumOfMessages int
-	ConsumeRetry  *ConsumeRetry
+	AutoAck        bool
+	Queue          string
+	Context        context.Context
+	MessageTag     string
+	EnableTrace    bool
+	NumOfMessages  int
+	ConsumeRetry   *ConsumeRetry
+	ConsumeTimeout time.Duration
 }
 
 type SubscribeOption func(*SubscribeOptions)
@@ -253,5 +254,11 @@ func WithConsumeRetry(maxRetryCount int64, maxRetryTime, minDelay time.Duration,
 				HandleRetryEnd: handleRetryEnd,
 			}
 		}
+	}
+}
+
+func WithConsumeTimeout(timeout time.Duration) SubscribeOption {
+	return func(o *SubscribeOptions) {
+		o.ConsumeTimeout = timeout
 	}
 }

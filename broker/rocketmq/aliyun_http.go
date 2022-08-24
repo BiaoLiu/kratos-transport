@@ -311,9 +311,15 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 }
 
 func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
+	var ticker *time.Ticker
 	respChan := make(chan aliyun.ConsumeMessageResponse, 1)
 	errChan := make(chan error, 1)
-	ticker := time.NewTicker(5 * time.Minute)
+
+	if sub.opts.ConsumeTimeout > 0 {
+		ticker = time.NewTicker(sub.opts.ConsumeTimeout)
+	} else {
+		ticker = time.NewTicker(5 * time.Minute)
+	}
 
 	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
 		h, _ := rqMsg.(handlerMessage)
