@@ -164,6 +164,7 @@ type SubscribeOptions struct {
 	AutoAck       bool
 	Queue         string
 	Context       context.Context
+	MessageTag    string
 	EnableTrace   bool
 	NumOfMessages int
 	ConsumeRetry  *ConsumeRetry
@@ -219,6 +220,12 @@ func WithQueueName(name string) SubscribeOption {
 func WithSubscribeContext(ctx context.Context) SubscribeOption {
 	return func(o *SubscribeOptions) {
 		o.Context = ctx
+	}
+}
+
+func WithMessageTag(messageTag string) SubscribeOption {
+	return func(o *SubscribeOptions) {
+		o.MessageTag = messageTag
 	}
 }
 

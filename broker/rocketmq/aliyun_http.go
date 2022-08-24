@@ -294,7 +294,7 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 		options.NumOfMessages = 3
 	}
 
-	mqConsumer := r.client.GetConsumer(r.instanceName, topic, options.Queue, "")
+	mqConsumer := r.client.GetConsumer(r.instanceName, topic, options.Queue, options.MessageTag)
 
 	sub := &aliyunSubscriber{
 		opts:    options,
@@ -482,6 +482,14 @@ func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handle
 		Message:           h.Message,
 		AliyunPublication: h.AliyunPublication,
 	}
+
+	defer func() {
+		if err := recover(); err != nil {
+			res.Err = fmt.Errorf("%v", err)
+			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
+		}
+	}()
+
 	res.Err = handler(ctx, &h.AliyunPublication)
 	h.ResCh <- res
 }

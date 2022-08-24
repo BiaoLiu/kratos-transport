@@ -2,11 +2,11 @@ package rocketmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/transport"
@@ -132,6 +132,12 @@ func (s *Server) RegisterSubscriber(ctx context.Context, topic, groupName string
 	if ctx == nil {
 		ctx = s.baseCtx
 	}
+	if topic == "" {
+		return errors.New("topic is empty")
+	}
+	if groupName == "" {
+		return errors.New("group is empty")
+	}
 
 	opts = append(opts, broker.WithQueueName(groupName))
 
@@ -145,7 +151,7 @@ func (s *Server) RegisterSubscriber(ctx context.Context, topic, groupName string
 		for _, opt := range opts {
 			opt(&options)
 		}
-		s.subscriberOpts[s.topicKey(topic)] = &SubscribeOption{handler: handler, binder: binder, opts: opts}
+		s.subscriberOpts[s.subscriberKey(groupName, topic, options.MessageTag)] = &SubscribeOption{handler: handler, binder: binder, opts: opts}
 	}
 	return nil
 }
@@ -156,29 +162,25 @@ func (s *Server) doRegisterSubscriber(topic string, handler broker.Handler, bind
 		return err
 	}
 
-	s.subscribers[s.topicKey(topic)] = sub
+	s.subscribers[s.subscriberKey(topic, sub.Options().Queue, sub.Options().MessageTag)] = sub
 
 	return nil
 }
 
 func (s *Server) doRegisterSubscriberMap() error {
-	for topicKey, opt := range s.subscriberOpts {
-		topic, _ := s.parseTopicKey(topicKey)
+	for subscriberKey, opt := range s.subscriberOpts {
+		_, topic, _ := s.parseSubscriberKey(subscriberKey)
 		_ = s.doRegisterSubscriber(topic, opt.handler, opt.binder, opt.opts...)
 	}
 	s.subscriberOpts = SubscribeOptionMap{}
 	return nil
 }
 
-func (s *Server) topicKey(topic string) string {
-	return fmt.Sprintf("%s:%d", topic, time.Now().UnixMicro())
+func (s *Server) subscriberKey(groupName, topic, messageTag string) string {
+	return fmt.Sprintf("%s:%s:%s", groupName, topic, messageTag)
 }
 
-func (s *Server) parseTopicKey(topicKey string) (topic, messageTag string) {
-	keys := strings.Split(topicKey, ":")
-	topic = keys[0]
-	if len(keys) > 1 {
-		messageTag = keys[1]
-	}
-	return topic, messageTag
+func (s *Server) parseSubscriberKey(subscriberKey string) (groupName, topic, messageTag string) {
+	keys := strings.Split(subscriberKey, ":")
+	return keys[0], keys[1], keys[2]
 }
