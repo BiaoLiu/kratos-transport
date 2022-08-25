@@ -405,7 +405,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 					for i := 0; i < count; i++ {
 						select {
 						case <-doneCtx.Done():
-							r.log.Error("consume message timeout")
+							r.log.Error("one or more message consumer timeout. messages:%+v", resp.Messages)
 							break end
 						case res := <-resCh:
 							// 消息消费失败:
