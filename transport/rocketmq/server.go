@@ -20,7 +20,7 @@ var (
 	_ transport.Endpointer = (*Server)(nil)
 )
 
-type SubscriberMap map[string]broker.Subscriber
+type SubscriberMap map[string][]broker.Subscriber
 
 type SubscribeOption struct {
 	handler broker.Handler
@@ -101,8 +101,10 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) Stop(ctx context.Context) error {
-	for _, sub := range s.subscribers {
-		_ = sub.Unsubscribe()
+	for _, subs := range s.subscribers {
+		for _, sub := range subs {
+			_ = sub.Unsubscribe()
+		}
 	}
 	s.log.Info("[rocketmq] server stopping")
 	s.started = false
@@ -151,7 +153,8 @@ func (s *Server) RegisterSubscriber(ctx context.Context, topic, groupName string
 		for _, opt := range opts {
 			opt(&options)
 		}
-		s.subscriberOpts[s.subscriberKey(groupName, topic, options.MessageTag)] = &SubscribeOption{handler: handler, binder: binder, opts: opts}
+		key := subscriberKey(groupName, topic, options.MessageTag)
+		s.subscriberOpts[key] = &SubscribeOption{handler: handler, binder: binder, opts: opts}
 	}
 	return nil
 }
@@ -161,26 +164,25 @@ func (s *Server) doRegisterSubscriber(topic string, handler broker.Handler, bind
 	if err != nil {
 		return err
 	}
-
-	s.subscribers[s.subscriberKey(topic, sub.Options().Queue, sub.Options().MessageTag)] = sub
-
+	key := subscriberKey(sub.Options().Queue, topic, sub.Options().MessageTag)
+	s.subscribers[key] = append(s.subscribers[key], sub)
 	return nil
 }
 
 func (s *Server) doRegisterSubscriberMap() error {
-	for subscriberKey, opt := range s.subscriberOpts {
-		_, topic, _ := s.parseSubscriberKey(subscriberKey)
+	for key, opt := range s.subscriberOpts {
+		_, topic, _ := ParseSubscriberKey(key)
 		_ = s.doRegisterSubscriber(topic, opt.handler, opt.binder, opt.opts...)
 	}
 	s.subscriberOpts = SubscribeOptionMap{}
 	return nil
 }
 
-func (s *Server) subscriberKey(groupName, topic, messageTag string) string {
-	return fmt.Sprintf("%s:%s:%s", groupName, topic, messageTag)
+func ParseSubscriberKey(key string) (groupName, topic, messageTag string) {
+	keys := strings.Split(key, ":")
+	return keys[0], keys[1], keys[2]
 }
 
-func (s *Server) parseSubscriberKey(subscriberKey string) (groupName, topic, messageTag string) {
-	keys := strings.Split(subscriberKey, ":")
-	return keys[0], keys[1], keys[2]
+func subscriberKey(groupName, topic, messageTag string) string {
+	return fmt.Sprintf("%s:%s:%s", groupName, topic, messageTag)
 }
