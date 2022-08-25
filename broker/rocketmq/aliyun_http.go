@@ -111,7 +111,9 @@ func (r *aliyunBroker) Init(opts ...broker.Option) error {
 	if v, ok := r.opts.Context.Value(groupNameKey{}).(string); ok {
 		r.groupName = v
 	}
-
+	if r.opts.Logger != nil {
+		r.log = r.opts.Logger
+	}
 	return nil
 }
 
