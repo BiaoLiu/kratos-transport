@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"github.com/go-kratos/kratos/v2/selector"
 	"github.com/go-kratos/kratos/v2/transport"
 )
 
@@ -16,6 +17,7 @@ type Transport struct {
 	operation   string
 	reqHeader   headerCarrier
 	replyHeader headerCarrier
+	nodeFilters []selector.NodeFilter
 }
 
 // Kind returns the transport kind.
@@ -41,6 +43,11 @@ func (tr *Transport) RequestHeader() transport.Header {
 // ReplyHeader returns the reply header.
 func (tr *Transport) ReplyHeader() transport.Header {
 	return tr.replyHeader
+}
+
+// NodeFilters returns the client select filters.
+func (tr *Transport) NodeFilters() []selector.NodeFilter {
+	return tr.nodeFilters
 }
 
 type headerCarrier struct{}

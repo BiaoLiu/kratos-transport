@@ -10,10 +10,20 @@
 
 ## 支持的协议
 
+### 消息队列
+
 - [MQTT](https://mqtt.org/)
-- [WebSocket](https://zh.wikipedia.org/zh-hant/WebSocket)
 - [STOMP](https://stomp.github.io/)
 - [AMQP](https://www.amqp.org/)
+
+### 其他类型
+
+- [WebSocket](https://zh.wikipedia.org/zh-hant/WebSocket)
+
+### RPC
+
+- [Thrift](https://thrift.apache.org/)
+- [GraphQL](https://graphql.org/)
 
 ## 支持的队列
 
