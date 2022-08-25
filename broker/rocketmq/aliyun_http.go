@@ -317,15 +317,8 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 }
 
 func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
-	var ticker *time.Ticker
 	respChan := make(chan aliyun.ConsumeMessageResponse, 1)
 	errChan := make(chan error, 1)
-
-	if sub.opts.ConsumeTimeout > 0 {
-		ticker = time.NewTicker(sub.opts.ConsumeTimeout)
-	} else {
-		ticker = time.NewTicker(5 * time.Minute)
-	}
 
 	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
 		h, _ := rqMsg.(handlerMessage)
@@ -402,10 +395,16 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 						count++
 					}
 
+					consumeTimeout := 5 * time.Minute
+					if sub.opts.ConsumeTimeout > 0 {
+						consumeTimeout = sub.opts.ConsumeTimeout
+					}
+					doneCtx, cancel := context.WithTimeout(context.Background(), consumeTimeout)
+
 				end:
 					for i := 0; i < count; i++ {
 						select {
-						case <-ticker.C:
+						case <-doneCtx.Done():
 							r.log.Error("consume message timeout")
 							break end
 						case res := <-resCh:
@@ -443,24 +442,25 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 								// 提交任务成功，取消息句柄用于回复消息状态
 								handles = append(handles, res.Message.ReceiptHandle)
 							}
+
+							if sub.opts.AutoAck {
+								if err := sub.reader.AckMessage(handles); err != nil {
+									// 某些消息的句柄可能超时，会导致消息消费状态确认不成功。
+									if errAckItems, ok := err.(gerr.ErrCode).Context()["Detail"].([]aliyun.ErrAckItem); ok {
+										for _, errAckItem := range errAckItems {
+											r.log.Errorf("ErrorHandle:%s, ErrorCode:%s, ErrorMsg:%s\n",
+												errAckItem.ErrorHandle, errAckItem.ErrorCode, errAckItem.ErrorMsg)
+										}
+									} else {
+										r.log.Errorf("ack error. err:%v", err)
+									}
+								}
+							}
 							r.finishConsumerSpan(res.Ctx, err)
 						}
 					}
 					close(resCh)
-
-					if sub.opts.AutoAck {
-						if err := sub.reader.AckMessage(handles); err != nil {
-							// 某些消息的句柄可能超时，会导致消息消费状态确认不成功。
-							if errAckItems, ok := err.(gerr.ErrCode).Context()["Detail"].([]aliyun.ErrAckItem); ok {
-								for _, errAckItem := range errAckItems {
-									r.log.Errorf("ErrorHandle:%s, ErrorCode:%s, ErrorMsg:%s\n",
-										errAckItem.ErrorHandle, errAckItem.ErrorCode, errAckItem.ErrorMsg)
-								}
-							} else {
-								r.log.Errorf("ack error. err:%v", err)
-							}
-						}
-					}
+					cancel()
 				}
 			case err := <-errChan:
 				{
