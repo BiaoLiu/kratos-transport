@@ -46,37 +46,37 @@ func StartTrace(ctx context.Context, operation string, header Headers, carrier p
 		carrier = make(propagation.MapCarrier)
 	}
 	ctx, span := tracer.Start(ctx, operation, carrier)
-	ctx = newTraceContext(ctx, tracer)
-	ctx = newSpanContext(ctx, span)
+	ctx = NewTraceContext(ctx, tracer)
+	ctx = NewSpanContext(ctx, span)
 	return ctx
 }
 
 func EndTrace(ctx context.Context, err error) {
-	tracer := fromTracerContext(ctx)
-	span := fromSpanContext(ctx)
+	tracer := FromTracerContext(ctx)
+	span := FromSpanContext(ctx)
 	if tracer != nil && span != nil {
 		tracer.End(ctx, span, nil, err)
 	}
 }
 
-func newTraceContext(ctx context.Context, tracer *tracing.Tracer) context.Context {
+func NewTraceContext(ctx context.Context, tracer *tracing.Tracer) context.Context {
 	ctx = context.WithValue(ctx, tracerKey{}, tracer)
 	return ctx
 }
 
-func newSpanContext(ctx context.Context, span trace.Span) context.Context {
+func NewSpanContext(ctx context.Context, span trace.Span) context.Context {
 	ctx = context.WithValue(ctx, spanKey{}, span)
 	return ctx
 }
 
-func fromTracerContext(ctx context.Context) *tracing.Tracer {
+func FromTracerContext(ctx context.Context) *tracing.Tracer {
 	if tracer, ok := ctx.Value(tracerKey{}).(*tracing.Tracer); ok {
 		return tracer
 	}
 	return nil
 }
 
-func fromSpanContext(ctx context.Context) trace.Span {
+func FromSpanContext(ctx context.Context) trace.Span {
 	if span, ok := ctx.Value(spanKey{}).(trace.Span); ok {
 		return span
 	}

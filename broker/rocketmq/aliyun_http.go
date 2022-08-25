@@ -2,12 +2,23 @@ package rocketmq
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
 	aliyun "github.com/aliyunmq/mq-http-go-sdk"
+	kerr "github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-kratos/kratos/v2/log"
 	gerr "github.com/gogap/errors"
 	"github.com/panjf2000/ants/v2"
 	"github.com/rfyiamcool/backoff"
 	"github.com/spf13/cast"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semConv "go.opentelemetry.io/otel/semconv/v1.12.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tx7do/kratos-transport/broker"
 )
@@ -317,12 +328,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 
 	pool, _ := ants.NewPoolWithFunc(sub.opts.NumOfMessages, func(rqMsg interface{}) {
 		h, _ := rqMsg.(handlerMessage)
-
-		ctx := context.Background()
-		if sub.opts.EnableTrace {
-			ctx = broker.StartTrace(ctx, sub.topic, h.AliyunPublication.Message().Headers, nil)
-		}
-		r.wrapHandler(ctx, h, sub.handler)
+		r.wrapHandler(h.Ctx, h, sub.handler)
 	})
 
 	go func() {
@@ -352,9 +358,10 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 					resCh := make(chan handlerResult, sub.opts.NumOfMessages)
 
 					for _, msg := range resp.Messages {
-						ctx, span := r.startConsumerSpan(sub.opts.Context, &msg)
+						ctx, _ := r.startConsumerSpan(sub.opts.Context, &msg)
 
 						h := handlerMessage{
+							Ctx:   ctx,
 							ResCh: resCh,
 						}
 						p := aliyunPublication{
@@ -362,7 +369,6 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							reader: sub.reader,
 							m:      &m,
 							rm:     []string{msg.ReceiptHandle},
-							ctx:    r.opts.Context,
 						}
 						m.Headers = msg.Properties
 						if m.Headers == nil {
@@ -377,7 +383,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							m.Body = sub.binder()
 							if err := broker.Unmarshal(r.opts.Codec, []byte(msg.MessageBody), m.Body); err != nil {
 								p.err = err
-								r.log.Error(err)
+								r.log.WithContext(ctx).Error(err)
 							}
 						} else {
 							m.Body = []byte(msg.MessageBody)
@@ -390,7 +396,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 						}
 						h.AliyunPublication = p
 						if err := pool.Invoke(h); err != nil {
-							r.log.Errorf("invoke handler error. msg:%+v err:%v", msg, err)
+							r.log.WithContext(ctx).Errorf("invoke handler error. msg:%+v err:%v", msg, err)
 							continue
 						}
 						count++
@@ -437,12 +443,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 								// 提交任务成功，取消息句柄用于回复消息状态
 								handles = append(handles, res.Message.ReceiptHandle)
 							}
-
-							r.finishConsumerSpan(span)
-
-							if sub.opts.EnableTrace {
-								broker.EndTrace(res.Ctx, err)
-							}
+							r.finishConsumerSpan(res.Ctx, err)
 						}
 					}
 					close(resCh)
@@ -507,16 +508,17 @@ func (r *aliyunBroker) sendHandlerResult(ctx context.Context, resCh chan<- handl
 }
 
 type handlerMessage struct {
-	ResCh             chan handlerResult
+	Ctx               context.Context
 	Message           message
 	AliyunPublication aliyunPublication
+	ResCh             chan handlerResult
 }
 
 type handlerResult struct {
 	Ctx               context.Context
-	Err               error
 	Message           message
 	AliyunPublication aliyunPublication
+	Err               error
 }
 
 type message struct {
@@ -529,10 +531,8 @@ func (r *aliyunBroker) startProducerSpan(ctx context.Context, topicName string, 
 	if r.opts.Tracer.Tracer == nil {
 		return nil
 	}
-
 	carrier := NewAliyunProducerMessageCarrier(msg)
 	ctx = r.opts.Tracer.Propagators.Extract(ctx, carrier)
-
 	attrs := []attribute.KeyValue{
 		semConv.MessagingSystemKey.String("rocketmq"),
 		semConv.MessagingDestinationKindTopic,
@@ -543,9 +543,7 @@ func (r *aliyunBroker) startProducerSpan(ctx context.Context, topicName string, 
 		trace.WithSpanKind(trace.SpanKindProducer),
 	}
 	ctx, span := r.opts.Tracer.Tracer.Start(ctx, "rocketmq.produce", opts...)
-
 	r.opts.Tracer.Propagators.Inject(ctx, carrier)
-
 	return span
 }
 
@@ -556,7 +554,6 @@ func (r *aliyunBroker) finishProducerSpan(span trace.Span, messageId string, err
 	if !span.IsRecording() {
 		return
 	}
-
 	span.SetAttributes(
 		semConv.MessagingMessageIDKey.String(messageId),
 		semConv.MessagingRocketmqNamespaceKey.String(r.namespace),
@@ -565,18 +562,16 @@ func (r *aliyunBroker) finishProducerSpan(span trace.Span, messageId string, err
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 	}
-
 	span.End()
 }
 
 func (r *aliyunBroker) startConsumerSpan(ctx context.Context, msg *aliyun.ConsumeMessageEntry) (context.Context, trace.Span) {
+	ctx = broker.ContextWithMessageHeader(ctx, msg.Properties)
 	if r.opts.Tracer.Tracer == nil {
 		return ctx, nil
 	}
-
 	carrier := NewAliyunConsumerMessageCarrier(msg)
 	ctx = r.opts.Tracer.Propagators.Extract(ctx, carrier)
-
 	attrs := []attribute.KeyValue{
 		semConv.MessagingSystemKey.String("rocketmq"),
 		semConv.MessagingDestinationKindTopic,
@@ -588,20 +583,28 @@ func (r *aliyunBroker) startConsumerSpan(ctx context.Context, msg *aliyun.Consum
 		trace.WithAttributes(attrs...),
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
-	newCtx, span := r.opts.Tracer.Tracer.Start(ctx, "rocketmq.consume", opts...)
-
-	r.opts.Tracer.Propagators.Inject(newCtx, carrier)
-
-	return newCtx, span
+	ctx, span := r.opts.Tracer.Tracer.Start(ctx, "rocketmq.consume", opts...)
+	r.opts.Tracer.Propagators.Inject(ctx, carrier)
+	ctx = broker.NewSpanContext(ctx, span)
+	return ctx, span
 }
 
-func (r *aliyunBroker) finishConsumerSpan(span trace.Span) {
+func (r *aliyunBroker) finishConsumerSpan(ctx context.Context, err error) {
+	span := broker.FromSpanContext(ctx)
 	if span == nil {
 		return
+	}
+	if err != nil {
+		span.RecordError(err)
+		if e := kerr.FromError(err); e != nil {
+			span.SetAttributes(attribute.Key("consume.status_code").Int64(int64(e.Code)))
+		}
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "OK")
 	}
 	if !span.IsRecording() {
 		return
 	}
-
 	span.End()
 }

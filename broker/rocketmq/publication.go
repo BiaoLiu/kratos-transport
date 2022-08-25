@@ -2,9 +2,11 @@ package rocketmq
 
 import (
 	"context"
+
 	aliyun "github.com/aliyunmq/mq-http-go-sdk"
 	"github.com/apache/rocketmq-client-go/v2"
 	"github.com/apache/rocketmq-client-go/v2/primitive"
+
 	"github.com/tx7do/kratos-transport/broker"
 )
 
@@ -41,7 +43,6 @@ type aliyunPublication struct {
 	topic  string
 	err    error
 	m      *broker.Message
-	ctx    context.Context
 	reader aliyun.MQConsumer
 	rm     []string
 }
