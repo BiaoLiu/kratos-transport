@@ -215,7 +215,6 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 	if aMsg.Properties == nil {
 		aMsg.Properties = make(map[string]string)
 	}
-	aMsg.Properties[broker.TraceID] = broker.TraceIDFromContext(options.Context)
 
 	span := r.startProducerSpan(options.Context, topic, &aMsg)
 	ret, err := p.PublishMessage(aMsg)
@@ -568,7 +567,6 @@ func (r *aliyunBroker) finishProducerSpan(span trace.Span, messageId string, err
 }
 
 func (r *aliyunBroker) startConsumerSpan(ctx context.Context, msg *aliyun.ConsumeMessageEntry) (context.Context, trace.Span) {
-	ctx = broker.ContextWithMessageHeader(ctx, msg.Properties)
 	if r.opts.Tracer.Tracer == nil {
 		return ctx, nil
 	}
