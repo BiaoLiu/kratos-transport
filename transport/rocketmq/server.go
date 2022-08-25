@@ -27,7 +27,7 @@ type SubscribeOption struct {
 	binder  broker.Binder
 	opts    []broker.SubscribeOption
 }
-type SubscribeOptionMap map[string]*SubscribeOption
+type SubscribeOptionMap map[string][]*SubscribeOption
 
 type Server struct {
 	broker.Broker
@@ -106,6 +106,7 @@ func (s *Server) Stop(ctx context.Context) error {
 			_ = sub.Unsubscribe()
 		}
 	}
+	s.subscribers = SubscriberMap{}
 	s.log.Info("[rocketmq] server stopping")
 	s.started = false
 	return s.Disconnect()
@@ -154,7 +155,7 @@ func (s *Server) RegisterSubscriber(ctx context.Context, topic, groupName string
 			opt(&options)
 		}
 		key := subscriberKey(groupName, topic, options.MessageTag)
-		s.subscriberOpts[key] = &SubscribeOption{handler: handler, binder: binder, opts: opts}
+		s.subscriberOpts[key] = append(s.subscriberOpts[key], &SubscribeOption{handler: handler, binder: binder, opts: opts})
 	}
 	return nil
 }
@@ -170,9 +171,11 @@ func (s *Server) doRegisterSubscriber(topic string, handler broker.Handler, bind
 }
 
 func (s *Server) doRegisterSubscriberMap() error {
-	for key, opt := range s.subscriberOpts {
+	for key, opts := range s.subscriberOpts {
 		_, topic, _ := ParseSubscriberKey(key)
-		_ = s.doRegisterSubscriber(topic, opt.handler, opt.binder, opt.opts...)
+		for _, opt := range opts {
+			_ = s.doRegisterSubscriber(topic, opt.handler, opt.binder, opt.opts...)
+		}
 	}
 	s.subscriberOpts = SubscribeOptionMap{}
 	return nil

@@ -360,7 +360,6 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 
 					for _, msg := range resp.Messages {
 						ctx, _ := r.startConsumerSpan(sub.opts.Context, &msg)
-
 						h := handlerMessage{
 							Ctx:   ctx,
 							ResCh: resCh,
