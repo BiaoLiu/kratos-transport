@@ -153,16 +153,16 @@ func (r *aliyunBroker) Disconnect() error {
 	return nil
 }
 
-func (r *aliyunBroker) Publish(topic string, msg broker.Any, opts ...broker.PublishOption) error {
+func (r *aliyunBroker) Publish(topic string, msg broker.Any, opts ...broker.PublishOption) (string, error) {
 	buf, err := broker.Marshal(r.opts.Codec, msg)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	return r.publish(topic, buf, opts...)
 }
 
-func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishOption) error {
+func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishOption) (string, error) {
 	options := broker.PublishOptions{
 		Context: context.Background(),
 	}
@@ -171,7 +171,7 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 	}
 
 	if r.client == nil {
-		return errors.New("client is nil")
+		return "", errors.New("client is nil")
 	}
 
 	r.Lock()
@@ -180,7 +180,7 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 		p = r.client.GetProducer(r.instanceName, topic)
 		if p == nil {
 			r.Unlock()
-			return errors.New("create producer failed")
+			return "", errors.New("create producer failed")
 		}
 
 		r.producers[topic] = p
@@ -222,7 +222,7 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 		r.log.Errorf("[rocketmq]: send message error: %s\n", err)
 	}
 	r.finishProducerSpan(span, ret.MessageId, err)
-	return err
+	return ret.MessageId, err
 }
 
 // publishWithBackoffRetry 消息重发(指数退避重试算法)
@@ -266,7 +266,7 @@ func (r *aliyunBroker) publishWithBackoffRetry(msg *aliyunPublication, consumeRe
 			RetriedCount:   cast.ToString(retriedCount),
 		}
 		opts = append(opts, WithProperties(m))
-		err := r.Publish(msg.topic, msg.Message().Body, opts...)
+		_, err := r.Publish(msg.topic, msg.Message().Body, opts...)
 		if err != nil {
 			return err
 		}
