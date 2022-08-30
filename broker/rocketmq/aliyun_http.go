@@ -207,7 +207,7 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 			sb.WriteString(k)
 			sb.WriteString(" ")
 		}
-		aMsg.MessageKey = sb.String()
+		aMsg.MessageKey = strings.TrimRight(sb.String(), " ")
 	}
 	if v, ok := options.Context.Value(shardingKeyKey{}).(string); ok {
 		aMsg.ShardingKey = v
