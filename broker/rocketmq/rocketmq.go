@@ -16,6 +16,7 @@ import (
 	"github.com/apache/rocketmq-client-go/v2/producer"
 
 	"github.com/go-kratos/kratos/v2/log"
+
 	"github.com/tx7do/kratos-transport/broker"
 )
 
@@ -264,16 +265,16 @@ func (r *rocketmqBroker) createConsumer(options *broker.SubscribeOptions) (rocke
 	return c, nil
 }
 
-func (r *rocketmqBroker) Publish(topic string, msg broker.Any, opts ...broker.PublishOption) error {
+func (r *rocketmqBroker) Publish(topic string, msg broker.Any, opts ...broker.PublishOption) (string, error) {
 	buf, err := broker.Marshal(r.opts.Codec, msg)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	return r.publish(topic, buf, opts...)
 }
 
-func (r *rocketmqBroker) publish(topic string, msg []byte, opts ...broker.PublishOption) error {
+func (r *rocketmqBroker) publish(topic string, msg []byte, opts ...broker.PublishOption) (string, error) {
 	options := broker.PublishOptions{
 		Context: context.Background(),
 	}
@@ -290,7 +291,7 @@ func (r *rocketmqBroker) publish(topic string, msg []byte, opts ...broker.Publis
 		p, err = r.createProducer()
 		if err != nil {
 			r.Unlock()
-			return err
+			return "", err
 		}
 
 		r.producers[topic] = p
@@ -362,7 +363,7 @@ func (r *rocketmqBroker) publish(topic string, msg []byte, opts ...broker.Publis
 
 	r.finishProducerSpan(span, messageId, err)
 
-	return err
+	return messageId, err
 }
 
 func (r *rocketmqBroker) Subscribe(topic string, handler broker.Handler, binder broker.Binder, opts ...broker.SubscribeOption) (broker.Subscriber, error) {

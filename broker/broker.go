@@ -51,7 +51,7 @@ type Broker interface {
 	Connect() error
 	Disconnect() error
 
-	Publish(topic string, msg Any, opts ...PublishOption) error
+	Publish(topic string, msg Any, opts ...PublishOption) (string, error)
 
 	Subscribe(topic string, handler Handler, binder Binder, opts ...SubscribeOption) (Subscriber, error)
 }
