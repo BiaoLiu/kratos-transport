@@ -26,9 +26,10 @@ const (
 	FirstRetryTime = "first_retry_time"
 	RetriedCount   = "retried_count"
 
-	MessageId  = "message_id"
-	MessageKey = "message_key"
-	MessageTag = "message_tag"
+	MessageId    = "message_id"
+	MessageKey   = "message_key"
+	MessageTag   = "message_tag"
+	MessageTopic = "message_topic"
 )
 
 type aliyunBroker struct {
@@ -364,11 +365,11 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 						m.Headers = msg.Properties
 						if m.Headers == nil {
 							m.Headers = make(map[string]string)
-						} else {
-							m.Headers[MessageId] = msg.MessageId
-							m.Headers[MessageKey] = msg.MessageKey
-							m.Headers[MessageTag] = msg.MessageTag
 						}
+						m.Headers[MessageId] = msg.MessageId
+						m.Headers[MessageKey] = msg.MessageKey
+						m.Headers[MessageTag] = msg.MessageTag
+						m.Headers[MessageTopic] = sub.topic
 
 						if sub.binder != nil {
 							m.Body = sub.binder()
