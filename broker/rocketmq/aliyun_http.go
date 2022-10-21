@@ -387,7 +387,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 						}
 						h.AliyunPublication = p
 						if r.opts.Before != nil {
-							r.opts.Before(m)
+							r.opts.Before(ctx, m)
 						}
 						if err := pool.Invoke(h); err != nil {
 							r.log.WithContext(ctx).Errorf("invoke handler error. msg:%+v err:%v", msg, err)
@@ -467,7 +467,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 								}
 							}
 							if r.opts.After != nil {
-								r.opts.After(m, err)
+								r.opts.After(res.Ctx, m, err)
 							}
 							r.finishConsumerSpan(res.Ctx, err)
 						}

@@ -39,8 +39,8 @@ type Options struct {
 	Context      context.Context
 	Logger       *log.Helper
 	Tracings     []tracing.Option
-	Before       func(message Message)
-	After        func(message Message, handleErr error)
+	Before       func(ctx context.Context, message Message)
+	After        func(ctx context.Context, message Message, handleErr error)
 }
 
 type Option func(*Options)
@@ -147,13 +147,13 @@ func WithGlobalPropagator() Option {
 	}
 }
 
-func WithCallBefore(before func(message Message)) Option {
+func WithCallBefore(before func(ctx context.Context, message Message)) Option {
 	return func(opt *Options) {
 		opt.Before = before
 	}
 }
 
-func WithCallAfter(after func(message Message, handleErr error)) Option {
+func WithCallAfter(after func(ctx context.Context, message Message, handleErr error)) Option {
 	return func(opt *Options) {
 		opt.After = after
 	}

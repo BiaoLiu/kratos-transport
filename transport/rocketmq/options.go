@@ -1,6 +1,7 @@
 package rocketmq
 
 import (
+	"context"
 	"crypto/tls"
 
 	"go.opentelemetry.io/otel/propagation"
@@ -117,13 +118,13 @@ func WithPropagator(propagators propagation.TextMapPropagator) ServerOption {
 	}
 }
 
-func WithCallBefore(before func(message broker.Message)) ServerOption {
+func WithCallBefore(before func(ctx context.Context, message broker.Message)) ServerOption {
 	return func(s *Server) {
 		s.brokerOpts = append(s.brokerOpts, broker.WithCallBefore(before))
 	}
 }
 
-func WithCallAfter(after func(message broker.Message, handleErr error)) ServerOption {
+func WithCallAfter(after func(ctx context.Context, message broker.Message, handleErr error)) ServerOption {
 	return func(s *Server) {
 		s.brokerOpts = append(s.brokerOpts, broker.WithCallAfter(after))
 	}
