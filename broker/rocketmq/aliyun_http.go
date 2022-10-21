@@ -454,8 +454,8 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							}
 
 							if sub.opts.AutoAck {
-								err = sub.reader.AckMessage(handles)
-								if err != nil {
+								if ackErr := sub.reader.AckMessage(handles); ackErr != nil {
+									err = ackErr
 									// 某些消息的句柄可能超时，会导致消息消费状态确认不成功。
 									r.log.WithContext(res.Ctx).Errorf("ack error. err:%v", err)
 									if errAckItems, ok := err.(gerr.ErrCode).Context()["Detail"].([]aliyun.ErrAckItem); ok {
