@@ -44,7 +44,7 @@ func TestServer(t *testing.T) {
 		WithCodec(encoding.GetCodec("json")),
 	)
 
-	err := srv.RegisterSubscriber(testTopic, testGroupName,
+	err := srv.RegisterSubscriber(ctx, testTopic, testGroupName,
 		api.RegisterHygrothermographJsonHandler(handleHygrothermograph),
 		api.HygrothermographCreator,
 	)
@@ -124,7 +124,7 @@ func TestAliyunServer(t *testing.T) {
 		WithGroupName(groupName),
 	)
 
-	err := srv.RegisterSubscriber(topicName, groupName,
+	err := srv.RegisterSubscriber(ctx, topicName, groupName,
 		api.RegisterHygrothermographJsonHandler(handleHygrothermograph),
 		api.HygrothermographCreator,
 	)

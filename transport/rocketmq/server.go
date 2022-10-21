@@ -83,7 +83,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	s.log.Infof("[rocketmq] server listening on: %s", s.Address())
 
-	s.err = s.doRegisterSubscriberMap()
+	s.err = s.doRegisterSubscriberMap(ctx)
 	if s.err != nil {
 		return s.err
 	}
@@ -114,10 +114,16 @@ func (s *Server) Endpoint() (*url.URL, error) {
 	return url.Parse(addr)
 }
 
-func (s *Server) RegisterSubscriber(topic, groupName string, handler broker.Handler, binder broker.Binder, opts ...broker.SubscribeOption) error {
+func (s *Server) RegisterSubscriber(ctx context.Context, topic, groupName string, handler broker.Handler, binder broker.Binder, opts ...broker.SubscribeOption) error {
 	s.Lock()
 	defer s.Unlock()
 
+	if s.baseCtx == nil {
+		s.baseCtx = context.Background()
+	}
+	if ctx == nil {
+		ctx = s.baseCtx
+	}
 	if topic == "" {
 		return errors.New("topic is empty")
 	}
@@ -129,7 +135,7 @@ func (s *Server) RegisterSubscriber(topic, groupName string, handler broker.Hand
 	opts = append([]broker.SubscribeOption{broker.WithSubscribeContext(s.baseCtx)}, opts...)
 
 	if s.started {
-		return s.doRegisterSubscriber(topic, handler, binder, opts...)
+		return s.doRegisterSubscriber(ctx, topic, handler, binder, opts...)
 	} else {
 		var options broker.SubscribeOptions
 		for _, opt := range opts {
@@ -141,7 +147,8 @@ func (s *Server) RegisterSubscriber(topic, groupName string, handler broker.Hand
 	return nil
 }
 
-func (s *Server) doRegisterSubscriber(topic string, handler broker.Handler, binder broker.Binder, opts ...broker.SubscribeOption) error {
+func (s *Server) doRegisterSubscriber(ctx context.Context, topic string, handler broker.Handler, binder broker.Binder, opts ...broker.SubscribeOption) error {
+	opts = append(opts, broker.WithSubscribeContext(ctx))
 	sub, err := s.Subscribe(topic, handler, binder, opts...)
 	if err != nil {
 		return err
@@ -151,11 +158,11 @@ func (s *Server) doRegisterSubscriber(topic string, handler broker.Handler, bind
 	return nil
 }
 
-func (s *Server) doRegisterSubscriberMap() error {
+func (s *Server) doRegisterSubscriberMap(ctx context.Context) error {
 	for key, opts := range s.subscriberOpts {
 		_, topic, _ := ParseSubscriberKey(key)
 		for _, opt := range opts {
-			_ = s.doRegisterSubscriber(topic, opt.handler, opt.binder, opt.opts...)
+			_ = s.doRegisterSubscriber(ctx, topic, opt.handler, opt.binder, opt.opts...)
 		}
 	}
 	s.subscriberOpts = SubscribeOptionMap{}
