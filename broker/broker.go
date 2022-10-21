@@ -2,6 +2,12 @@ package broker
 
 import (
 	"context"
+
+	"github.com/go-kratos/kratos/v2/errors"
+)
+
+var (
+	ErrReConsume = errors.InternalServer("NEED RECONSUME", "Consume error.Reconsume later")
 )
 
 type Any interface{}
