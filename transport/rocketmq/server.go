@@ -53,11 +53,8 @@ func NewServer(opts ...ServerOption) *Server {
 		brokerOpts:     []broker.Option{},
 		started:        false,
 	}
-
 	srv.init(opts...)
-
 	srv.Broker = rocketmq.NewBroker(srv.brokerOpts...)
-
 	return srv
 }
 
@@ -75,28 +72,22 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.err != nil {
 		return s.err
 	}
-
+	s.baseCtx = ctx
 	if s.started {
 		return nil
 	}
-
 	_ = s.Init()
-
 	s.err = s.Connect()
 	if s.err != nil {
 		return s.err
 	}
-
 	s.log.Infof("[rocketmq] server listening on: %s", s.Address())
 
 	s.err = s.doRegisterSubscriberMap()
 	if s.err != nil {
 		return s.err
 	}
-
-	s.baseCtx = ctx
 	s.started = true
-
 	return nil
 }
 
@@ -116,36 +107,26 @@ func (s *Server) Endpoint() (*url.URL, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-
 	addr := s.Address()
 	if !strings.HasPrefix(addr, "tcp://") {
 		addr = "tcp://" + addr
 	}
-
 	return url.Parse(addr)
 }
 
-func (s *Server) RegisterSubscriber(ctx context.Context, topic, groupName string, handler broker.Handler, binder broker.Binder, opts ...broker.SubscribeOption) error {
+func (s *Server) RegisterSubscriber(topic, groupName string, handler broker.Handler, binder broker.Binder, opts ...broker.SubscribeOption) error {
 	s.Lock()
 	defer s.Unlock()
 
-	if s.baseCtx == nil {
-		s.baseCtx = context.Background()
-	}
-	if ctx == nil {
-		ctx = s.baseCtx
-	}
 	if topic == "" {
 		return errors.New("topic is empty")
 	}
 	if groupName == "" {
 		return errors.New("group is empty")
 	}
-
 	opts = append(opts, broker.WithQueueName(groupName))
-
 	// context必须要插入到头部，否则后续传入的配置会被覆盖掉。
-	opts = append([]broker.SubscribeOption{broker.WithSubscribeContext(ctx)}, opts...)
+	opts = append([]broker.SubscribeOption{broker.WithSubscribeContext(s.baseCtx)}, opts...)
 
 	if s.started {
 		return s.doRegisterSubscriber(topic, handler, binder, opts...)
