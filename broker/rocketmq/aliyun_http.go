@@ -386,6 +386,9 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							ReceiptHandle: msg.ReceiptHandle,
 						}
 						h.AliyunPublication = p
+						if r.opts.Before != nil {
+							r.opts.Before(m)
+						}
 						if err := pool.Invoke(h); err != nil {
 							r.log.WithContext(ctx).Errorf("invoke handler error. msg:%+v err:%v", msg, err)
 							continue
@@ -462,6 +465,9 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 								} else {
 									r.log.WithContext(res.Ctx).Infof("mq消费成功")
 								}
+							}
+							if r.opts.After != nil {
+								r.opts.After(m, err)
 							}
 							r.finishConsumerSpan(res.Ctx, err)
 						}

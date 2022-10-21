@@ -116,3 +116,15 @@ func WithPropagator(propagators propagation.TextMapPropagator) ServerOption {
 		s.brokerOpts = append(s.brokerOpts, broker.WithPropagator(propagators))
 	}
 }
+
+func WithCallBefore(before func(message broker.Message)) ServerOption {
+	return func(s *Server) {
+		s.brokerOpts = append(s.brokerOpts, broker.WithCallBefore(before))
+	}
+}
+
+func WithCallAfter(after func(message broker.Message, handleErr error)) ServerOption {
+	return func(s *Server) {
+		s.brokerOpts = append(s.brokerOpts, broker.WithCallAfter(after))
+	}
+}

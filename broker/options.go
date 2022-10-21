@@ -31,19 +31,16 @@ type TracingOptions struct {
 ///////////////////////////////////////////////////////////////////////////////
 
 type Options struct {
-	Addrs []string
-
-	Codec encoding.Codec
-
+	Addrs        []string
+	Codec        encoding.Codec
 	ErrorHandler Handler
-
-	Secure    bool
-	TLSConfig *tls.Config
-
-	Context context.Context
-
-	Logger   *log.Helper
-	Tracings []tracing.Option
+	Secure       bool
+	TLSConfig    *tls.Config
+	Context      context.Context
+	Logger       *log.Helper
+	Tracings     []tracing.Option
+	Before       func(message Message)
+	After        func(message Message, handleErr error)
 }
 
 type Option func(*Options)
@@ -56,19 +53,14 @@ func (o *Options) Apply(opts ...Option) {
 
 func NewOptions() Options {
 	opt := Options{
-		Addrs: []string{},
-		Codec: DefaultCodec,
-
+		Addrs:        []string{},
+		Codec:        DefaultCodec,
 		ErrorHandler: nil,
-
-		Secure:    false,
-		TLSConfig: nil,
-
-		Context: context.Background(),
-
-		Logger: log.NewHelper(log.GetLogger()),
+		Secure:       false,
+		TLSConfig:    nil,
+		Context:      context.Background(),
+		Logger:       log.NewHelper(log.GetLogger()),
 	}
-
 	return opt
 }
 
@@ -155,6 +147,18 @@ func WithGlobalPropagator() Option {
 	}
 }
 
+func WithCallBefore(before func(message Message)) Option {
+	return func(opt *Options) {
+		opt.Before = before
+	}
+}
+
+func WithCallAfter(after func(message Message, handleErr error)) Option {
+	return func(opt *Options) {
+		opt.After = after
+	}
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 type PublishOptions struct {
@@ -213,6 +217,8 @@ type SubscribeOptions struct {
 	NumOfMessages  int
 	ConsumeRetry   *ConsumeRetry
 	ConsumeTimeout time.Duration
+	Before         func(message *Message)
+	After          func(message *Message, handleErr error)
 }
 
 type SubscribeOption func(*SubscribeOptions)
@@ -300,6 +306,18 @@ func WithConsumeTimeout(timeout time.Duration) SubscribeOption {
 		o.ConsumeTimeout = timeout
 	}
 }
+
+//func WithCallBefore(before func(message *Message)) SubscribeOption {
+//	return func(o *SubscribeOptions) {
+//		o.Before = before
+//	}
+//}
+//
+//func WithCallAfter(after func(message *Message, handleErr error)) SubscribeOption {
+//	return func(o *SubscribeOptions) {
+//		o.After = after
+//	}
+//}
 
 ///////////////////////////////////////////////////////////////////////////////
 
