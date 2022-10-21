@@ -9,18 +9,17 @@ import (
 	"time"
 
 	aliyun "github.com/aliyunmq/mq-http-go-sdk"
-	kerr "github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-kratos/kratos/v2/log"
 	gerr "github.com/gogap/errors"
 	"github.com/panjf2000/ants/v2"
 	"github.com/rfyiamcool/backoff"
 	"github.com/spf13/cast"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	semConv "go.opentelemetry.io/otel/semconv/v1.12.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tx7do/kratos-transport/broker"
+	"github.com/tx7do/kratos-transport/tracing"
 )
 
 const (
@@ -53,13 +52,16 @@ type aliyunBroker struct {
 
 	client    aliyun.MQClient
 	producers map[string]aliyun.MQProducer
+
+	producerTracer *tracing.Tracer
+	consumerTracer *tracing.Tracer
 }
 
 func newAliyunHttpBroker(options broker.Options) broker.Broker {
 	return &aliyunBroker{
 		producers:  make(map[string]aliyun.MQProducer),
 		opts:       options,
-		log:        log.NewHelper(log.GetLogger()),
+		log:        log.NewHelper(log.With(log.GetLogger(), "module", "rocketmq")),
 		retryCount: 2,
 	}
 }
@@ -114,6 +116,10 @@ func (r *aliyunBroker) Init(opts ...broker.Option) error {
 	if r.opts.Logger != nil {
 		r.log = r.opts.Logger
 	}
+	if len(r.opts.Tracings) > 0 {
+		r.producerTracer = tracing.NewTracer(trace.SpanKindProducer, "rocketmq-producer", r.opts.Tracings...)
+		r.consumerTracer = tracing.NewTracer(trace.SpanKindConsumer, "rocketmq-consumer", r.opts.Tracings...)
+	}
 	return nil
 }
 
@@ -158,7 +164,6 @@ func (r *aliyunBroker) Publish(topic string, msg broker.Any, opts ...broker.Publ
 	if err != nil {
 		return "", err
 	}
-
 	return r.publish(topic, buf, opts...)
 }
 
@@ -169,7 +174,6 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 	for _, o := range opts {
 		o(&options)
 	}
-
 	if r.client == nil {
 		return "", errors.New("client is nil")
 	}
@@ -182,7 +186,6 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 			r.Unlock()
 			return "", errors.New("create producer failed")
 		}
-
 		r.producers[topic] = p
 	} else {
 	}
@@ -191,7 +194,6 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 	aMsg := aliyun.PublishMessageRequest{
 		MessageBody: string(msg),
 	}
-
 	if v, ok := options.Context.Value(propertiesKey{}).(map[string]string); ok {
 		aMsg.Properties = v
 	}
@@ -219,7 +221,7 @@ func (r *aliyunBroker) publish(topic string, msg []byte, opts ...broker.PublishO
 	span := r.startProducerSpan(options.Context, topic, &aMsg)
 	ret, err := p.PublishMessage(aMsg)
 	if err != nil {
-		r.log.Errorf("[rocketmq]: send message error: %s\n", err)
+		r.log.Errorf("send message error. err:%v", err)
 	}
 	r.finishProducerSpan(span, ret.MessageId, err)
 	return ret.MessageId, err
@@ -287,7 +289,6 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 	if r.client == nil {
 		return nil, errors.New("client is nil")
 	}
-
 	options := broker.SubscribeOptions{
 		Context: context.Background(),
 		AutoAck: true,
@@ -301,7 +302,6 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 	}
 
 	mqConsumer := r.client.GetConsumer(r.instanceName, topic, options.Queue, options.MessageTag)
-
 	sub := &aliyunSubscriber{
 		opts:    options,
 		topic:   topic,
@@ -310,9 +310,7 @@ func (r *aliyunBroker) Subscribe(topic string, handler broker.Handler, binder br
 		reader:  mqConsumer,
 		done:    make(chan struct{}),
 	}
-
 	go r.doConsume(sub)
-
 	return sub, nil
 }
 
@@ -395,65 +393,74 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 						count++
 					}
 
-					consumeTimeout := 5 * time.Minute
+					consumeTimeout := 3 * time.Minute
 					if sub.opts.ConsumeTimeout > 0 {
 						consumeTimeout = sub.opts.ConsumeTimeout
 					}
-					doneCtx, cancel := context.WithTimeout(context.Background(), consumeTimeout)
+					stopCtx, cancel := context.WithTimeout(context.Background(), consumeTimeout)
 
 				end:
 					for i := 0; i < count; i++ {
 						select {
-						case <-doneCtx.Done():
+						case <-stopCtx.Done():
 							r.log.Errorf("one or more message consumer timeout. messages:%+v", resp.Messages)
 							break end
 						case res := <-resCh:
-							// 消息消费失败:
-							//   1.已配置重试策略，重试发布消息失败，不进行ack响应，依赖mq的重试
-							//   2.未配置重试策略，不进行ack响应，依赖mq的重试
+							// 消息消费结果处理:
+							//   1.err==ErrReConsume且已配置重试策略：根据重试策略重试，如果重试发布消息失败，不进行ack响应，依赖mq的重试
+							//   2.err==ErrReConsume且未配置重试策略：不进行ack响应，依赖mq的重试
+							//   3.err==nil或err!=ErrReConsume：ack响应，不重试
 							if res.Err != nil {
 								err = res.Err
-								r.log.WithContext(res.Ctx).Error(res.Err)
+								r.log.WithContext(res.Ctx).Errorf("mq消费失败 err:%v", res.Err)
 
-								if sub.opts.ConsumeRetry != nil {
-									opts := []broker.PublishOption{
-										broker.WithPublishContext(res.Ctx),
-										WithTag(res.Message.Tag),
-										WithKeys([]string{res.Message.Key}),
-									}
-									firstRetryTime, retriedCount, retryErr := r.publishWithBackoffRetry(&res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
-
-									logMsg := "重试...%s msg:%+v 首次重试时间:%v 最大重试时间:%v 重试次数:%v 最大重试次数:%v"
-									retrySuccess := fmt.Sprintf(logMsg, "mq发送完成", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount)
-									retryFail := fmt.Sprintf(logMsg+" err:%v", "mq发送失败", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount, retryErr)
-
-									if retryErr != nil {
-										err = retryErr
-										if errors.Is(retryErr, broker.ErrMaxRetryCount) || errors.Is(retryErr, broker.ErrMaxRetryTime) {
-											handles = append(handles, res.Message.ReceiptHandle)
+								if errors.Is(err, broker.ErrReConsume) {
+									if sub.opts.ConsumeRetry != nil {
+										// ErrReConsume且已配置重试策略：根据重试策略重试
+										opts := []broker.PublishOption{
+											broker.WithPublishContext(res.Ctx),
+											WithTag(res.Message.Tag),
+											WithKeys([]string{res.Message.Key}),
 										}
-										r.log.WithContext(res.Ctx).Errorf(retryFail)
+										firstRetryTime, retriedCount, retryErr := r.publishWithBackoffRetry(&res.AliyunPublication, sub.opts.ConsumeRetry, opts...)
+										logMsg := "重试...%s msg:%+v 首次重试时间:%v 最大重试时间:%v 重试次数:%v 最大重试次数:%v"
+										if retryErr != nil {
+											err = retryErr
+											if errors.Is(retryErr, broker.ErrMaxRetryCount) || errors.Is(retryErr, broker.ErrMaxRetryTime) {
+												handles = append(handles, res.Message.ReceiptHandle)
+											}
+											retryFail := fmt.Sprintf(logMsg+" err:%v", "mq发送失败", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount, retryErr)
+											r.log.WithContext(res.Ctx).Errorf(retryFail)
+										} else {
+											handles = append(handles, res.Message.ReceiptHandle)
+											retrySuccess := fmt.Sprintf(logMsg, "mq发送完成", res.AliyunPublication, firstRetryTime, sub.opts.ConsumeRetry.MaxRetryTime, retriedCount, sub.opts.ConsumeRetry.MaxRetryCount)
+											r.log.WithContext(res.Ctx).Infof(retrySuccess)
+										}
 									} else {
-										handles = append(handles, res.Message.ReceiptHandle)
-										r.log.WithContext(res.Ctx).Infof(retrySuccess)
+										// 不进行ack响应，依赖mq的重试
+										r.finishConsumerSpan(res.Ctx, err)
 									}
+								} else {
+									// ack响应，不重试
+									handles = append(handles, res.Message.ReceiptHandle)
 								}
 							} else {
-								// 提交任务成功，取消息句柄用于回复消息状态
+								// ack响应，不重试
 								handles = append(handles, res.Message.ReceiptHandle)
 							}
 
 							if sub.opts.AutoAck {
-								if err := sub.reader.AckMessage(handles); err != nil {
+								err = sub.reader.AckMessage(handles)
+								if err != nil {
 									// 某些消息的句柄可能超时，会导致消息消费状态确认不成功。
+									r.log.WithContext(res.Ctx).Errorf("ack error. err:%v", err)
 									if errAckItems, ok := err.(gerr.ErrCode).Context()["Detail"].([]aliyun.ErrAckItem); ok {
 										for _, errAckItem := range errAckItems {
-											r.log.Errorf("ErrorHandle:%s, ErrorCode:%s, ErrorMsg:%s\n",
-												errAckItem.ErrorHandle, errAckItem.ErrorCode, errAckItem.ErrorMsg)
+											r.log.WithContext(res.Ctx).Errorf("ErrorHandle:%s, ErrorCode:%s, ErrorMsg:%s", errAckItem.ErrorHandle, errAckItem.ErrorCode, errAckItem.ErrorMsg)
 										}
-									} else {
-										r.log.Errorf("ack error. err:%v", err)
 									}
+								} else {
+									r.log.WithContext(res.Ctx).Infof("mq消费成功")
 								}
 							}
 							r.finishConsumerSpan(res.Ctx, err)
@@ -491,7 +498,7 @@ func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handle
 	defer func() {
 		if err := recover(); err != nil {
 			res.Err = fmt.Errorf("%v", err)
-			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", h.AliyunPublication, err)
+			r.log.WithContext(ctx).Errorf("mq消费异常 msg:%+v err:%v", h.AliyunPublication, err)
 		}
 		r.sendHandlerResult(ctx, h.ResCh, res)
 	}()
@@ -501,7 +508,7 @@ func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handle
 func (r *aliyunBroker) sendHandlerResult(ctx context.Context, resCh chan<- handlerResult, res handlerResult) {
 	defer func() {
 		if err := recover(); err != nil {
-			r.log.WithContext(ctx).Errorf("consume message error. msg:%+v err:%v", res.AliyunPublication, err)
+			r.log.WithContext(ctx).Errorf("mq消费异常 msg:%+v err:%v", res.AliyunPublication, err)
 		}
 	}()
 	resCh <- res
@@ -528,49 +535,37 @@ type message struct {
 }
 
 func (r *aliyunBroker) startProducerSpan(ctx context.Context, topicName string, msg *aliyun.PublishMessageRequest) trace.Span {
-	if r.opts.Tracer.Tracer == nil {
+	if r.producerTracer == nil {
 		return nil
 	}
 	carrier := NewAliyunProducerMessageCarrier(msg)
-	ctx = r.opts.Tracer.Propagators.Extract(ctx, carrier)
 	attrs := []attribute.KeyValue{
 		semConv.MessagingSystemKey.String("rocketmq"),
 		semConv.MessagingDestinationKindTopic,
 		semConv.MessagingDestinationKey.String(topicName),
 	}
-	opts := []trace.SpanStartOption{
-		trace.WithAttributes(attrs...),
-		trace.WithSpanKind(trace.SpanKindProducer),
-	}
-	ctx, span := r.opts.Tracer.Tracer.Start(ctx, "rocketmq.produce", opts...)
-	r.opts.Tracer.Propagators.Inject(ctx, carrier)
+	var span trace.Span
+	ctx, span = r.producerTracer.Start(ctx, carrier, attrs...)
 	return span
 }
 
 func (r *aliyunBroker) finishProducerSpan(span trace.Span, messageId string, err error) {
-	if span == nil {
+	if r.producerTracer == nil {
 		return
 	}
-	if !span.IsRecording() {
-		return
-	}
-	span.SetAttributes(
+	attrs := []attribute.KeyValue{
 		semConv.MessagingMessageIDKey.String(messageId),
 		semConv.MessagingRocketmqNamespaceKey.String(r.namespace),
 		semConv.MessagingRocketmqClientGroupKey.String(r.groupName),
-	)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
 	}
-	span.End()
+	r.producerTracer.End(context.Background(), span, err, attrs...)
 }
 
 func (r *aliyunBroker) startConsumerSpan(ctx context.Context, msg *aliyun.ConsumeMessageEntry) (context.Context, trace.Span) {
-	if r.opts.Tracer.Tracer == nil {
+	if r.consumerTracer == nil {
 		return ctx, nil
 	}
 	carrier := NewAliyunConsumerMessageCarrier(msg)
-	ctx = r.opts.Tracer.Propagators.Extract(ctx, carrier)
 	attrs := []attribute.KeyValue{
 		semConv.MessagingSystemKey.String("rocketmq"),
 		semConv.MessagingDestinationKindTopic,
@@ -578,12 +573,8 @@ func (r *aliyunBroker) startConsumerSpan(ctx context.Context, msg *aliyun.Consum
 		semConv.MessagingOperationReceive,
 		semConv.MessagingMessageIDKey.String(msg.MessageId),
 	}
-	opts := []trace.SpanStartOption{
-		trace.WithAttributes(attrs...),
-		trace.WithSpanKind(trace.SpanKindConsumer),
-	}
-	ctx, span := r.opts.Tracer.Tracer.Start(ctx, "rocketmq.consume", opts...)
-	r.opts.Tracer.Propagators.Inject(ctx, carrier)
+	var span trace.Span
+	ctx, span = r.consumerTracer.Start(ctx, carrier, attrs...)
 	ctx = broker.NewSpanContext(ctx, span)
 	return ctx, span
 }
@@ -593,17 +584,8 @@ func (r *aliyunBroker) finishConsumerSpan(ctx context.Context, err error) {
 	if span == nil {
 		return
 	}
-	if err != nil {
-		span.RecordError(err)
-		if e := kerr.FromError(err); e != nil {
-			span.SetAttributes(attribute.Key("consume.status_code").Int64(int64(e.Code)))
-		}
-		span.SetStatus(codes.Error, err.Error())
-	} else {
-		span.SetStatus(codes.Ok, "OK")
-	}
-	if !span.IsRecording() {
+	if r.consumerTracer == nil {
 		return
 	}
-	span.End()
+	r.consumerTracer.End(context.Background(), span, err)
 }

@@ -11,6 +11,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/go-kratos/kratos/v2/encoding"
+
+	"github.com/tx7do/kratos-transport/tracing"
 )
 
 var (
@@ -40,8 +42,8 @@ type Options struct {
 
 	Context context.Context
 
-	Logger *log.Helper
-	Tracer TracingOptions
+	Logger   *log.Helper
+	Tracings []tracing.Option
 }
 
 type Option func(*Options)
@@ -131,37 +133,25 @@ func WithLogger(logger *log.Helper) Option {
 
 func WithTracerProvider(provider trace.TracerProvider, tracerName string) Option {
 	return func(opt *Options) {
-		if provider != nil {
-			opt.Tracer.TracerProvider = provider
-		} else {
-			opt.Tracer.TracerProvider = otel.GetTracerProvider()
-		}
-
-		if opt.Tracer.Propagators == nil {
-			//opt.Tracer.Propagators = otel.GetTextMapPropagator()
-			opt.Tracer.Propagators = propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{})
-		}
-
-		if len(tracerName) == 0 {
-			tracerName = DefaultTracerName
-		}
-
-		opt.Tracer.Tracer = opt.Tracer.TracerProvider.Tracer(tracerName)
+		opt.Tracings = append(opt.Tracings, tracing.WithTracerProvider(provider))
 	}
 }
 
-func WithPropagators(propagators propagation.TextMapPropagator) Option {
+func WithPropagator(propagators propagation.TextMapPropagator) Option {
 	return func(opt *Options) {
-		if propagators != nil {
-			opt.Tracer.Propagators = propagators
-		} else {
-			//opt.Tracer.Propagators = otel.GetTextMapPropagator()
-			opt.Tracer.Propagators = propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{})
-		}
-		if opt.Tracer.TracerProvider == nil {
-			opt.Tracer.TracerProvider = otel.GetTracerProvider()
-			opt.Tracer.Tracer = opt.Tracer.TracerProvider.Tracer(DefaultTracerName)
-		}
+		opt.Tracings = append(opt.Tracings, tracing.WithPropagator(propagators))
+	}
+}
+
+func WithGlobalTracerProvider() Option {
+	return func(opt *Options) {
+		opt.Tracings = append(opt.Tracings, tracing.WithGlobalTracerProvider())
+	}
+}
+
+func WithGlobalPropagator() Option {
+	return func(opt *Options) {
+		opt.Tracings = append(opt.Tracings, tracing.WithGlobalPropagator())
 	}
 }
 
