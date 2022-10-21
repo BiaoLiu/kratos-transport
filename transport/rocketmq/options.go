@@ -12,6 +12,7 @@ import (
 
 	"github.com/tx7do/kratos-transport/broker"
 	"github.com/tx7do/kratos-transport/broker/rocketmq"
+	"github.com/tx7do/kratos-transport/logging"
 )
 
 type ServerOption func(o *Server)
@@ -127,5 +128,11 @@ func WithCallBefore(before func(ctx context.Context, message broker.Message)) Se
 func WithCallAfter(after func(ctx context.Context, message broker.Message, handleErr error)) ServerOption {
 	return func(s *Server) {
 		s.brokerOpts = append(s.brokerOpts, broker.WithCallAfter(after))
+	}
+}
+
+func WithLogging(logging logging.Logging) ServerOption {
+	return func(s *Server) {
+		s.brokerOpts = append(s.brokerOpts, broker.WithLogging(logging))
 	}
 }

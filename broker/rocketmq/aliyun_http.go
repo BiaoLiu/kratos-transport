@@ -349,12 +349,14 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 					var err error
 					var count int
 					resCh := make(chan handlerResult, sub.opts.NumOfMessages)
+					startTime := time.Now()
 
 					for _, msg := range resp.Messages {
 						ctx, _ := r.startConsumerSpan(sub.opts.Context, &msg)
 						h := handlerMessage{
-							Ctx:   ctx,
-							ResCh: resCh,
+							Ctx:       ctx,
+							StartTime: startTime,
+							ResCh:     resCh,
 						}
 						p := aliyunPublication{
 							topic:  sub.topic,
@@ -416,7 +418,10 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 							//   3.err==nil或err!=ErrReConsume：ack响应，不重试
 							if res.Err != nil {
 								err = res.Err
-								r.log.WithContext(res.Ctx).Errorf("mq消费失败 err:%v", res.Err)
+								if r.opts.Logging != nil {
+									r.opts.Logging(res.Ctx, *res.AliyunPublication.Message(), time.Since(startTime).Seconds(), err)
+								}
+								//r.log.WithContext(res.Ctx).Errorf("mq消费失败 err:%v", res.Err)
 
 								if errors.Is(err, broker.ErrReConsume) {
 									if sub.opts.ConsumeRetry != nil {
@@ -464,11 +469,14 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 										}
 									}
 								} else {
-									r.log.WithContext(res.Ctx).Infof("mq消费成功")
+									if r.opts.Logging != nil {
+										r.opts.Logging(res.Ctx, *res.AliyunPublication.Message(), time.Since(startTime).Seconds(), nil)
+									}
+									//r.log.WithContext(res.Ctx).Infof("mq消费成功")
 								}
 							}
 							if r.opts.After != nil {
-								r.opts.After(res.Ctx, m, err)
+								r.opts.After(res.Ctx, *res.AliyunPublication.Message(), err)
 							}
 							r.finishConsumerSpan(res.Ctx, err)
 						}
@@ -498,6 +506,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 func (r *aliyunBroker) wrapHandler(ctx context.Context, h handlerMessage, handler broker.Handler) {
 	res := handlerResult{
 		Ctx:               ctx,
+		StartTime:         h.StartTime,
 		Message:           h.Message,
 		AliyunPublication: h.AliyunPublication,
 	}
@@ -523,6 +532,7 @@ func (r *aliyunBroker) sendHandlerResult(ctx context.Context, resCh chan<- handl
 
 type handlerMessage struct {
 	Ctx               context.Context
+	StartTime         time.Time
 	Message           message
 	AliyunPublication aliyunPublication
 	ResCh             chan handlerResult
@@ -530,6 +540,7 @@ type handlerMessage struct {
 
 type handlerResult struct {
 	Ctx               context.Context
+	StartTime         time.Time
 	Message           message
 	AliyunPublication aliyunPublication
 	Err               error

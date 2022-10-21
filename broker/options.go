@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-kratos/kratos/v2/encoding"
 
+	"github.com/tx7do/kratos-transport/logging"
 	"github.com/tx7do/kratos-transport/tracing"
 )
 
@@ -39,6 +40,7 @@ type Options struct {
 	Context      context.Context
 	Logger       *log.Helper
 	Tracings     []tracing.Option
+	Logging      logging.Logging
 	Before       func(ctx context.Context, message Message)
 	After        func(ctx context.Context, message Message, handleErr error)
 }
@@ -156,6 +158,12 @@ func WithCallBefore(before func(ctx context.Context, message Message)) Option {
 func WithCallAfter(after func(ctx context.Context, message Message, handleErr error)) Option {
 	return func(opt *Options) {
 		opt.After = after
+	}
+}
+
+func WithLogging(logging logging.Logging) Option {
+	return func(opt *Options) {
+		opt.Logging = logging
 	}
 }
 
