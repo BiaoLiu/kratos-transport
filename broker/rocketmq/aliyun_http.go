@@ -344,7 +344,6 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 				return
 			case resp := <-respChan:
 				{
-					var m broker.Message
 					var handles []string
 					var err error
 					var count int
@@ -352,6 +351,7 @@ func (r *aliyunBroker) doConsume(sub *aliyunSubscriber) {
 					startTime := time.Now()
 
 					for _, msg := range resp.Messages {
+						var m broker.Message
 						ctx, _ := r.startConsumerSpan(sub.opts.Context, &msg)
 						h := handlerMessage{
 							Ctx:       ctx,
